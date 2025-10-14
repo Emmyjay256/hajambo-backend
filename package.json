@@ -8,9 +8,9 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "africastalking": "^3.0.3",
-    "body-parser": "^2.2.0",
-    "cors": "^2.8.5",
-    "express": "^5.1.0"
-  }
+  "africastalking": "^0.7.7",
+  "body-parser": "^2.2.0",
+  "cors": "^2.8.5",
+  "express": "^5.1.0"
+}
 }
