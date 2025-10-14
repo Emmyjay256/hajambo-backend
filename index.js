@@ -31,21 +31,15 @@ function requireWebhookToken(req, res, next) {
 // Replace these with real DB queries later.
 // ---------------------------
 async function getTenantConfigByDestination(toNumberOrShortcode) {
-  // Example logic:
-  // - Identify tenant by 'to' (shortcode or longcode) or USSD serviceCode
-  // - Return senderId, reply template, language, etc.
-  // TODO: replace with SELECT ... FROM tenants WHERE shortcode = $1
   return {
     tenantId: "tenant-001",
-    senderId: process.env.AT_DEFAULT_SENDER || undefined, // set approved sender id in prod
+    senderId: process.env.AT_DEFAULT_SENDER || undefined, // approved sender in prod
     locale: "en",
     replyTemplate: (text) => `Hajambo! You said: "${text ?? ""}"`,
   };
 }
 
 async function getUserPrefsByPhone(phone) {
-  // Example user lookup:
-  // TODO: replace with SELECT ... FROM users WHERE phone = $1
   return {
     userId: "user-xyz",
     blocked: false,
@@ -53,10 +47,15 @@ async function getUserPrefsByPhone(phone) {
   };
 }
 
-// Utility: robust send
-async function sendSms({ to, message, from }) {
-  // AT expects an array for 'to'
-  return SMS.send({ to: Array.isArray(to) ? to : [to], message, from });
+// Utility: robust send via SDK
+async function sendSms({ to, message, from, enqueue }) {
+  const payload = {
+    to: Array.isArray(to) ? to : [to],
+    message,
+    ...(from ? { from } : {}),
+    ...(typeof enqueue !== "undefined" ? { enqueue } : {}),
+  };
+  return SMS.send(payload);
 }
 
 // ---------------------------
@@ -65,54 +64,41 @@ async function sendSms({ to, message, from }) {
 app.get("/", (_req, res) => res.send("Hajambo Backend is running ✅"));
 
 // ---------------------------
-// Inbound SMS → dynamic reply via AT
+// Inbound SMS → dynamic auto-reply via AT (SDK send)
 // ---------------------------
 app.post("/webhooks/sms", requireWebhookToken, async (req, res) => {
   try {
-    // AT posts form-encoded fields: from, to, text, date, id, linkId, networkCode...
     const { from, to, text, id, linkId } = req.body;
 
-    // 1) Identify tenant based on 'to' (shortcode/longcode)
     const tenant = await getTenantConfigByDestination(to);
-
-    // 2) Identify user preferences
     const user = await getUserPrefsByPhone(from);
     if (user?.blocked) {
-      // Acknowledge but do not reply
       console.log("Blocked user:", from);
       return res.status(200).send("OK");
     }
 
-    // 3) Craft dynamic reply
     const reply = tenant.replyTemplate(text);
+    await sendSms({ to: from, message: reply, from: tenant.senderId, enqueue: 1 });
 
-    // 4) Send SMS back to sender using tenant's senderId if available
-    await sendSms({ to: from, message: reply, from: tenant.senderId });
-
-    // 5) (Optional) Persist inbound/outbound to DB for audit/analytics
+    // TODO: persist inbound/outbound records
     // await db.insertInbound({ id, from, to, text, linkId, tenantId: tenant.tenantId });
     // await db.insertOutbound({ to: from, message: reply, tenantId: tenant.tenantId });
 
-    // Always 200 to avoid retries
     res.status(200).send("OK");
   } catch (err) {
     console.error("Inbound SMS error:", err?.message || err);
-    // Still 200 to prevent webhook retries storm; log & monitor
     res.status(200).send("OK");
   }
 });
 
 // ---------------------------
-// Delivery Reports (DLR) → update status in DB (later)
+// Delivery Reports (DLR)
 // ---------------------------
 app.post("/webhooks/sms/dlr", requireWebhookToken, async (req, res) => {
   try {
-    // Typical fields: status, messageId, phoneNumber, networkCode, failureReason...
-    const dlr = req.body;
+    const dlr = req.body; // status, messageId, phoneNumber, networkCode...
     console.log("Delivery Report:", dlr);
-
     // TODO: db.updateMessageStatus(dlr.messageId, dlr.status, dlr);
-
     res.status(200).send("OK");
   } catch (err) {
     console.error("DLR error:", err?.message || err);
@@ -121,7 +107,7 @@ app.post("/webhooks/sms/dlr", requireWebhookToken, async (req, res) => {
 });
 
 // ---------------------------
-// USSD (dynamic flow by session text)
+// USSD (CON/END, text/plain)
 // ---------------------------
 app.post("/webhooks/ussd", requireWebhookToken, (req, res) => {
   const { sessionId, phoneNumber, text, serviceCode } = req.body;
@@ -146,4 +132,106 @@ app.post("/webhooks/ussd", requireWebhookToken, (req, res) => {
   res.send(reply);
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// ===================================================
+// BULK SEND (SDK)  — mirrors AT response structure
+// POST /api/sms/send
+// Body: { phoneNumbers: ["+256..."], message: "Hi", senderId?: "Hajambo", enqueue?: 1|0 }
+// ===================================================
+app.post("/api/sms/send", async (req, res) => {
+  try {
+    const { phoneNumbers, message, senderId, enqueue } = req.body;
+
+    if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+      return res.status(400).json({ error: "phoneNumbers must be a non-empty array." });
+    }
+    if (!message) {
+      return res.status(400).json({ error: "message is required." });
+    }
+
+    const from = senderId || process.env.AT_DEFAULT_SENDER; // optional in sandbox
+    const result = await sendSms({ to: phoneNumbers, message, from, enqueue });
+    // result already shaped as { SMSMessageData: { Message, Recipients: [...] } }
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("Bulk send (SDK) error:", err?.response?.data || err?.message || err);
+    return res.status(500).json({ error: "Failed to send SMS", detail: err?.message || String(err) });
+  }
+});
+
+// ===================================================
+// BULK SEND (RAW HTTP) — mirrors docs exactly
+// POST /api/sms/send-http
+// Body: { phoneNumbers: ["+256..."], message: "Hi", senderId?: "Hajambo", enqueue?: 1|0 }
+// ===================================================
+app.post("/api/sms/send-http", async (req, res) => {
+  try {
+    const { phoneNumbers, message, senderId, enqueue = 1 } = req.body;
+    if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+      return res.status(400).json({ error: "phoneNumbers must be a non-empty array." });
+    }
+    if (!message) {
+      return res.status(400).json({ error: "message is required." });
+    }
+
+    const isSandbox = (process.env.AT_ENV || "sandbox") === "sandbox";
+    const base = isSandbox
+      ? "https://api.sandbox.africastalking.com" // if sandbox bulk host isn’t active, use SDK route instead
+      : "https://api.africastalking.com";
+
+    const url = `${base}/version1/messaging/bulk`;
+
+    const body = {
+      username: process.env.AT_USERNAME || "sandbox",
+      message,
+      phoneNumbers,
+      ...(senderId ? { senderId } : {}),
+      enqueue, // 1 or 0
+    };
+
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        apiKey: process.env.AT_API_KEY,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await r.json();
+    return res.status(r.ok ? 200 : r.status).json(data);
+  } catch (err) {
+    console.error("Bulk send (HTTP) error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to send via HTTP", detail: err?.message || String(err) });
+  }
+});
+
+// ===================================================
+// FETCH INBOX (polling) — GET /api/sms/fetch?lastReceivedId=0
+// ===================================================
+app.get("/api/sms/fetch", async (req, res) => {
+  try {
+    const lastReceivedId = req.query.lastReceivedId || "0";
+    const isSandbox = (process.env.AT_ENV || "sandbox") === "sandbox";
+    const base = isSandbox
+      ? "https://api.sandbox.africastalking.com"
+      : "https://api.africastalking.com";
+
+    const url = `${base}/version1/messaging?username=${encodeURIComponent(
+      process.env.AT_USERNAME || "sandbox"
+    )}&lastReceivedId=${encodeURIComponent(lastReceivedId)}`;
+
+    const r = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json", apiKey: process.env.AT_API_KEY },
+    });
+
+    const data = await r.json();
+    return res.status(r.ok ? 200 : r.status).json(data);
+  } catch (e) {
+    console.error("Fetch inbox error:", e?.message || e);
+    return res.status(500).json({ error: "Failed to fetch inbox" });
+  }
+});
+
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
