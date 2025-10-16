@@ -78,7 +78,14 @@ app.post("/webhooks/sms", requireWebhookToken, async (req, res) => {
     }
 
     const reply = tenant.replyTemplate(text);
-    await sendSms({ to: from, message: reply, from: tenant.senderId, enqueue: 1 });
+
+    // IMPORTANT: enqueue must be a BOOLEAN for the SDK
+    await sendSms({
+      to: from,
+      message: reply,
+      from: tenant.senderId,
+      enqueue: true, // ✅ boolean (fixes "enqueue must be a boolean")
+    });
 
     // TODO: persist inbound/outbound records
     // await db.insertInbound({ id, from, to, text, linkId, tenantId: tenant.tenantId });
@@ -148,6 +155,7 @@ app.post("/api/sms/send", async (req, res) => {
       return res.status(400).json({ error: "message is required." });
     }
 
+    // preserve your behavior; pass through enqueue as provided
     const from = senderId || process.env.AT_DEFAULT_SENDER; // optional in sandbox
     const result = await sendSms({ to: phoneNumbers, message, from, enqueue });
     // result already shaped as { SMSMessageData: { Message, Recipients: [...] } }
@@ -175,7 +183,7 @@ app.post("/api/sms/send-http", async (req, res) => {
 
     const isSandbox = (process.env.AT_ENV || "sandbox") === "sandbox";
     const base = isSandbox
-      ? "https://api.sandbox.africastalking.com" // if sandbox bulk host isn’t active, use SDK route instead
+      ? "https://api.sandbox.africastalking.com"
       : "https://api.africastalking.com";
 
     const url = `${base}/version1/messaging/bulk`;
@@ -185,7 +193,7 @@ app.post("/api/sms/send-http", async (req, res) => {
       message,
       phoneNumbers,
       ...(senderId ? { senderId } : {}),
-      enqueue, // 1 or 0
+      enqueue, // 1 or 0 (raw HTTP API accepts numeric flag)
     };
 
     const r = await fetch(url, {
