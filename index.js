@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
 import africastalking from "africastalking";
 import pool from "./db.js";
 import 'dotenv/config';
@@ -18,8 +17,7 @@ app.use("/messages", messagesRouter);
 
 
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+
 
 // --- Africa's Talking client (no hardcoded creds) ---
 const at = africastalking({
