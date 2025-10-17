@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
 import africastalking from "africastalking";
+import pool from "./db.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -62,6 +63,23 @@ async function sendSms({ to, message, from, enqueue }) {
 // Health
 // ---------------------------
 app.get("/", (_req, res) => res.send("Hajambo Backend is running ✅"));
+
+
+
+// ---------------------------
+// Db init
+// ---------------------------
+app.get("/test-db", async (_req, res) => {
+  try {
+    const r = await pool.query("SELECT NOW() AS now");
+    res.json({ ok: true, now: r.rows[0].now });
+  } catch (e) {
+    console.error("DB error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
 
 // ---------------------------
 // Inbound SMS → dynamic auto-reply via AT (SDK send)
