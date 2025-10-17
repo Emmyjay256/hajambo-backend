@@ -1,8 +1,8 @@
+import 'dotenv/config';
 import express from "express";
 import cors from "cors";
 import africastalking from "africastalking";
 import pool from "./db.js";
-import 'dotenv/config';
 import authRouter from "./routes/auth.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
@@ -10,13 +10,18 @@ import messagesRouter from "./routes/messages.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ✅ global middleware FIRST
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// (optional) debug to confirm body parsing
+app.post("/__debug_body", (req, res) => res.json({ body: req.body }));
+
+// ✅ then mount routers
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
-
-
-
-app.use(cors());
 
 
 // --- Africa's Talking client (no hardcoded creds) ---
