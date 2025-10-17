@@ -8,12 +8,14 @@ import authRouter from "./routes/auth.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+
 
 app.use(cors());
 app.use(bodyParser.json());
