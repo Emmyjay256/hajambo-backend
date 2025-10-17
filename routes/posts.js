@@ -1,194 +1,210 @@
 import express from "express";
-import { body, validationResult } from "express-validator";
 import pool from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth } from "./_auth.js";
 
 const router = express.Router();
 
 /**
- * GET /posts?type=post|reel&cursor=<id>&limit=20
+ * GET /posts?since=<epochMs>&type=post|reel&limit=50
+ * Returns newest-first posts with per-user flags.
  */
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
-    const type = req.query.type === "reel" ? "reel" : req.query.type === "post" ? "post" : null;
-    const limit = Math.min(Number(req.query.limit || 20), 100);
-    const cursor = req.query.cursor ? Number(req.query.cursor) : null;
+    const userId = req.userId;
+    const sinceMs = req.query.since ? Number(req.query.since) : null;
+    const type = req.query.type || null; // "post" | "reel" | null
+    const limit = Math.min(Number(req.query.limit || 50), 200);
 
     const params = [];
-    let sql = `SELECT id, user_id, type, content, media_url, likes_count, comments_count, created_at
-               FROM post WHERE 1=1`;
+    let where = [];
+    if (sinceMs) {
+      params.push(new Date(sinceMs).toISOString());
+      where.push(`p.created_at > $${params.length}`);
+    }
     if (type) {
       params.push(type);
-      sql += ` AND type = $${params.length}`;
+      where.push(`p.type = $${params.length}`);
     }
-    if (cursor) {
-      params.push(cursor);
-      sql += ` AND id < $${params.length}`;
-    }
-    sql += ` ORDER BY id DESC LIMIT ${limit}`;
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
+    // NOTE: table name is singular: post
+    const sql = `
+      SELECT
+        p.id,
+        p.user_id,
+        p.type,
+        p.content,
+        p.media_url,
+        EXTRACT(EPOCH FROM p.created_at) * 1000 AS created_at_ms,
+        p.likes_count,
+        p.comments_count,
+        EXISTS (
+          SELECT 1 FROM post_interaction pi
+          WHERE pi.post_id = p.id AND pi.user_id = $${params.push(userId)} AND pi.type = 'like'
+        ) AS liked_by_me,
+        EXISTS (
+          SELECT 1 FROM favourite f
+          WHERE f.post_id = p.id AND f.user_id = $${params.push(userId)}
+        ) AS favorited_by_me
+      FROM post p
+      ${whereSql}
+      ORDER BY p.created_at DESC
+      LIMIT $${params.push(limit)}
+    `;
     const r = await pool.query(sql, params);
-    return res.json({ items: r.rows, nextCursor: r.rows.at(-1)?.id || null });
+    const items = r.rows.map(row => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      type: row.type,                    // "post" | "reel"
+      content: row.content || "",
+      mediaUrl: row.media_url || null,
+      createdAtMs: Number(row.created_at_ms),
+      likesCount: Number(row.likes_count || 0),
+      commentsCount: Number(row.comments_count || 0),
+      likedByMe: row.liked_by_me,
+      favoritedByMe: row.favorited_by_me,
+    }));
+    res.json({ items, serverNowMs: Date.now() });
   } catch (e) {
-    console.error("posts list error:", e.message);
-    return res.status(500).json({ error: "Failed to fetch posts" });
+    console.error("GET /posts error:", e.message);
+    res.status(500).json({ error: "Failed to fetch posts" });
   }
 });
 
-/**
- * POST /posts
- * { type: 'post'|'reel', content?, mediaUrl? }
- */
-router.post(
-  "/",
-  requireAuth,
-  body("type").isIn(["post", "reel"]),
-  body("content").optional().isString(),
-  body("mediaUrl").optional().isString(),
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-      const { type, content, mediaUrl } = req.body;
-      const r = await pool.query(
-        `INSERT INTO post (user_id, type, content, media_url)
-         VALUES ($1,$2,$3,$4)
-         RETURNING id, user_id, type, content, media_url, likes_count, comments_count, created_at`,
-        [req.user.id, type, content || null, mediaUrl || null]
-      );
-      return res.status(201).json(r.rows[0]);
-    } catch (e) {
-      console.error("post create error:", e.message);
-      return res.status(500).json({ error: "Failed to create post" });
-    }
-  }
-);
-
-/**
- * POST /posts/:id/like (toggle)
- */
-router.post("/:id/like", requireAuth, async (req, res) => {
-  const client = await pool.connect();
+/** Create a post */
+router.post("/", requireAuth, express.json(), async (req, res) => {
   try {
-    await client.query("BEGIN");
-    const postId = Number(req.params.id);
-    const userId = req.user.id;
+    const userId = req.userId;
+    const { type = "post", content = "", mediaUrl = null } = req.body || {};
+    const r = await pool.query(
+      `INSERT INTO post (user_id, type, content, media_url)
+       VALUES ($1,$2,$3,$4)
+       RETURNING id, user_id, type, content, media_url, EXTRACT(EPOCH FROM created_at)*1000 created_at_ms, likes_count, comments_count`,
+      [userId, type, content, mediaUrl]
+    );
+    const p = r.rows[0];
+    res.status(201).json({
+      id: String(p.id),
+      userId: String(p.user_id),
+      type: p.type,
+      content: p.content || "",
+      mediaUrl: p.media_url,
+      createdAtMs: Number(p.created_at_ms),
+      likesCount: Number(p.likes_count || 0),
+      commentsCount: Number(p.comments_count || 0),
+      likedByMe: false,
+      favoritedByMe: false,
+    });
+  } catch (e) {
+    console.error("POST /posts error:", e.message);
+    res.status(500).json({ error: "Create failed" });
+  }
+});
 
-    const exists = await client.query(
+/** Toggle like */
+router.post("/:id/like", requireAuth, async (req, res) => {
+  const userId = req.userId;
+  const postId = Number(req.params.id);
+  try {
+    const liked = await pool.query(
       `SELECT 1 FROM post_interaction WHERE post_id=$1 AND user_id=$2 AND type='like'`,
       [postId, userId]
     );
-
-    if (exists.rowCount > 0) {
-      await client.query(
-        `DELETE FROM post_interaction WHERE post_id=$1 AND user_id=$2 AND type='like'`,
-        [postId, userId]
-      );
-      await client.query(`UPDATE post SET likes_count = GREATEST(likes_count - 1, 0) WHERE id=$1`, [postId]);
-      await client.query("COMMIT");
+    if (liked.rowCount) {
+      await pool.query(`DELETE FROM post_interaction WHERE post_id=$1 AND user_id=$2 AND type='like'`, [postId, userId]);
+      await pool.query(`UPDATE post SET likes_count = GREATEST(likes_count - 1, 0) WHERE id=$1`, [postId]);
       return res.json({ liked: false });
     } else {
-      await client.query(
-        `INSERT INTO post_interaction (post_id, user_id, type) VALUES ($1,$2,'like')`,
+      await pool.query(
+        `INSERT INTO post_interaction (post_id, user_id, type) VALUES ($1,$2,'like') ON CONFLICT DO NOTHING`,
         [postId, userId]
       );
-      await client.query(`UPDATE post SET likes_count = likes_count + 1 WHERE id=$1`, [postId]);
-      await client.query("COMMIT");
+      await pool.query(`UPDATE post SET likes_count = likes_count + 1 WHERE id=$1`, [postId]);
       return res.json({ liked: true });
     }
   } catch (e) {
-    await client.query("ROLLBACK");
     console.error("like toggle error:", e.message);
-    return res.status(500).json({ error: "Failed to toggle like" });
-  } finally {
-    client.release();
+    res.status(500).json({ error: "Toggle like failed" });
   }
 });
 
-/**
- * POST /posts/:id/favourite (toggle)
- */
+/** Toggle favourite */
 router.post("/:id/favourite", requireAuth, async (req, res) => {
+  const userId = req.userId;
+  const postId = Number(req.params.id);
   try {
-    const postId = Number(req.params.id);
-    const userId = req.user.id;
-
-    const exists = await pool.query(
-      `SELECT 1 FROM favourite WHERE post_id=$1 AND user_id=$2`,
-      [postId, userId]
-    );
-
-    if (exists.rowCount > 0) {
+    const f = await pool.query(`SELECT 1 FROM favourite WHERE post_id=$1 AND user_id=$2`, [postId, userId]);
+    if (f.rowCount) {
       await pool.query(`DELETE FROM favourite WHERE post_id=$1 AND user_id=$2`, [postId, userId]);
-      return res.json({ favourited: false });
+      return res.json({ favorited: false });
     } else {
       await pool.query(
-        `INSERT INTO favourite (post_id, user_id) VALUES ($1,$2)`,
-        [postId, userId]
+        `INSERT INTO favourite (user_id, post_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [userId, postId]
       );
-      return res.json({ favourited: true });
+      return res.json({ favorited: true });
     }
   } catch (e) {
-    console.error("favourite toggle error:", e.message);
-    return res.status(500).json({ error: "Failed to toggle favourite" });
+    console.error("fav toggle error:", e.message);
+    res.status(500).json({ error: "Toggle favourite failed" });
   }
 });
 
-/**
- * POST /posts/:id/comments  { body }
- * GET  /posts/:id/comments?cursor=<id>&limit=20
- */
-router.post("/:id/comments",
-  requireAuth,
-  body("body").isString().isLength({ min: 1 }),
-  async (req, res) => {
-    const client = await pool.connect();
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-      await client.query("BEGIN");
-      const postId = Number(req.params.id);
-      const ins = await client.query(
-        `INSERT INTO comment (post_id, user_id, body) VALUES ($1,$2,$3)
-         RETURNING id, post_id, user_id, body, created_at`,
-        [postId, req.user.id, req.body.body]
-      );
-      await client.query(`UPDATE post SET comments_count = comments_count + 1 WHERE id=$1`, [postId]);
-      await client.query("COMMIT");
-      return res.status(201).json(ins.rows[0]);
-    } catch (e) {
-      await client.query("ROLLBACK");
-      console.error("comment create error:", e.message);
-      return res.status(500).json({ error: "Failed to add comment" });
-    } finally {
-      client.release();
-    }
-  }
-);
-
-router.get("/:id/comments", async (req, res) => {
+/** Comments: list delta + create */
+router.get("/:id/comments", requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const limit = Math.min(Number(req.query.limit || 20), 100);
-    const cursor = req.query.cursor ? Number(req.query.cursor) : null;
-
-    let sql = `SELECT id, post_id, user_id, body, created_at
-               FROM comment WHERE post_id=$1`;
+    const sinceMs = req.query.since ? Number(req.query.since) : null;
     const params = [postId];
-
-    if (cursor) {
-      sql += " AND id < $2";
-      params.push(cursor);
-    }
-    sql += ` ORDER BY id DESC LIMIT ${limit}`;
-
-    const r = await pool.query(sql, params);
-    return res.json({ items: r.rows, nextCursor: r.rows.at(-1)?.id || null });
+    const whereSince = sinceMs ? `AND c.created_at > $${params.push(new Date(sinceMs).toISOString())}` : "";
+    const r = await pool.query(
+      `SELECT c.id, c.post_id, c.user_id, c.body, EXTRACT(EPOCH FROM c.created_at)*1000 created_at_ms
+       FROM comment c
+       WHERE c.post_id=$1 ${whereSince}
+       ORDER BY c.created_at ASC
+       LIMIT 500`,
+      params
+    );
+    res.json({
+      items: r.rows.map(x => ({
+        id: String(x.id),
+        postId: String(x.post_id),
+        userId: String(x.user_id),
+        body: x.body,
+        createdAtMs: Number(x.created_at_ms),
+      })),
+      serverNowMs: Date.now(),
+    });
   } catch (e) {
-    console.error("comments list error:", e.message);
-    return res.status(500).json({ error: "Failed to fetch comments" });
+    console.error("GET /comments error:", e.message);
+    res.status(500).json({ error: "Failed to fetch comments" });
+  }
+});
+
+router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
+  try {
+    const postId = Number(req.params.id);
+    const userId = req.userId;
+    const body = (req.body?.body || "").trim();
+    if (!body) return res.status(400).json({ error: "body required" });
+
+    const r = await pool.query(
+      `INSERT INTO comment (post_id, user_id, body) VALUES ($1,$2,$3)
+       RETURNING id, post_id, user_id, body, EXTRACT(EPOCH FROM created_at)*1000 created_at_ms`,
+      [postId, userId, body]
+    );
+    await pool.query(`UPDATE post SET comments_count = comments_count + 1 WHERE id=$1`, [postId]);
+    const c = r.rows[0];
+    res.status(201).json({
+      id: String(c.id),
+      postId: String(c.post_id),
+      userId: String(c.user_id),
+      body: c.body,
+      createdAtMs: Number(c.created_at_ms),
+    });
+  } catch (e) {
+    console.error("POST /comments error:", e.message);
+    res.status(500).json({ error: "Create comment failed" });
   }
 });
 
