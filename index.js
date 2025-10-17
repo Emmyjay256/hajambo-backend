@@ -3,6 +3,14 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import africastalking from "africastalking";
 import pool from "./db.js";
+import 'dotenv/config';
+import authRouter from "./routes/auth.js";
+import postsRouter from "./routes/posts.js";
+import messagesRouter from "./routes/messages.js";
+
+app.use("/auth", authRouter);
+app.use("/posts", postsRouter);
+app.use("/messages", messagesRouter);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
