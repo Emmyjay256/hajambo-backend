@@ -6,17 +6,17 @@ const router = express.Router();
 
 /**
  * GET /posts?since=<epochMs>&type=post|reel&limit=50
- * Returns newest-first posts with per-user flags.
+ * Returns newest-first posts with per-user flags + author info.
  */
 router.get("/", requireAuth, async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.userId ?? req.user?.sub;
     const sinceMs = req.query.since ? Number(req.query.since) : null;
     const type = req.query.type || null; // "post" | "reel" | null
     const limit = Math.min(Number(req.query.limit || 50), 200);
 
     const params = [];
-    let where = [];
+    const where = [];
     if (sinceMs) {
       params.push(new Date(sinceMs).toISOString());
       where.push(`p.created_at > $${params.length}`);
@@ -27,7 +27,6 @@ router.get("/", requireAuth, async (req, res) => {
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-    // NOTE: table name is singular: post
     const sql = `
       SELECT
         p.id,
@@ -38,6 +37,11 @@ router.get("/", requireAuth, async (req, res) => {
         EXTRACT(EPOCH FROM p.created_at) * 1000 AS created_at_ms,
         p.likes_count,
         p.comments_count,
+        -- author
+        u.username AS author_username,
+        u.display_name AS author_display_name,
+        u.avatar_url AS author_avatar_url,
+        -- flags
         EXISTS (
           SELECT 1 FROM post_interaction pi
           WHERE pi.post_id = p.id AND pi.user_id = $${params.push(userId)} AND pi.type = 'like'
@@ -47,23 +51,32 @@ router.get("/", requireAuth, async (req, res) => {
           WHERE f.post_id = p.id AND f.user_id = $${params.push(userId)}
         ) AS favorited_by_me
       FROM post p
+      JOIN app_user u ON u.id = p.user_id
       ${whereSql}
       ORDER BY p.created_at DESC
       LIMIT $${params.push(limit)}
     `;
+
     const r = await pool.query(sql, params);
     const items = r.rows.map(row => ({
       id: String(row.id),
       userId: String(row.user_id),
-      type: row.type,                    // "post" | "reel"
+      type: row.type, // "post" | "reel"
       content: row.content || "",
       mediaUrl: row.media_url || null,
       createdAtMs: Number(row.created_at_ms),
       likesCount: Number(row.likes_count || 0),
       commentsCount: Number(row.comments_count || 0),
-      likedByMe: row.liked_by_me,
-      favoritedByMe: row.favorited_by_me,
+      likedByMe: !!row.liked_by_me,
+      favoritedByMe: !!row.favorited_by_me,
+      author: {
+        id: String(row.user_id),
+        username: row.author_username || null,
+        displayName: row.author_display_name || null,
+        avatarUrl: row.author_avatar_url || null,
+      },
     }));
+
     res.json({ items, serverNowMs: Date.now() });
   } catch (e) {
     console.error("GET /posts error:", e.message);
@@ -74,8 +87,9 @@ router.get("/", requireAuth, async (req, res) => {
 /** Create a post */
 router.post("/", requireAuth, express.json(), async (req, res) => {
   try {
-    const userId = req.userId;
+    const userId = req.userId ?? req.user?.sub;
     const { type = "post", content = "", mediaUrl = null } = req.body || {};
+
     const r = await pool.query(
       `INSERT INTO post (user_id, type, content, media_url)
        VALUES ($1,$2,$3,$4)
@@ -83,6 +97,14 @@ router.post("/", requireAuth, express.json(), async (req, res) => {
       [userId, type, content, mediaUrl]
     );
     const p = r.rows[0];
+
+    // fetch minimal author fields for response
+    const au = await pool.query(
+      `SELECT username, display_name, avatar_url FROM app_user WHERE id=$1`,
+      [userId]
+    );
+    const author = au.rows[0] || {};
+
     res.status(201).json({
       id: String(p.id),
       userId: String(p.user_id),
@@ -94,6 +116,12 @@ router.post("/", requireAuth, express.json(), async (req, res) => {
       commentsCount: Number(p.comments_count || 0),
       likedByMe: false,
       favoritedByMe: false,
+      author: {
+        id: String(p.user_id),
+        username: author.username || null,
+        displayName: author.display_name || null,
+        avatarUrl: author.avatar_url || null,
+      },
     });
   } catch (e) {
     console.error("POST /posts error:", e.message);
@@ -103,7 +131,7 @@ router.post("/", requireAuth, express.json(), async (req, res) => {
 
 /** Toggle like */
 router.post("/:id/like", requireAuth, async (req, res) => {
-  const userId = req.userId;
+  const userId = req.userId ?? req.user?.sub;
   const postId = Number(req.params.id);
   try {
     const liked = await pool.query(
@@ -130,7 +158,7 @@ router.post("/:id/like", requireAuth, async (req, res) => {
 
 /** Toggle favourite */
 router.post("/:id/favourite", requireAuth, async (req, res) => {
-  const userId = req.userId;
+  const userId = req.userId ?? req.user?.sub;
   const postId = Number(req.params.id);
   try {
     const f = await pool.query(`SELECT 1 FROM favourite WHERE post_id=$1 AND user_id=$2`, [postId, userId]);
@@ -150,7 +178,7 @@ router.post("/:id/favourite", requireAuth, async (req, res) => {
   }
 });
 
-/** Comments: list delta + create */
+/** Comments: list delta + create (unchanged) */
 router.get("/:id/comments", requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
@@ -184,7 +212,7 @@ router.get("/:id/comments", requireAuth, async (req, res) => {
 router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const userId = req.userId;
+    const userId = req.userId ?? req.user?.sub;
     const body = (req.body?.body || "").trim();
     if (!body) return res.status(400).json({ error: "body required" });
 
@@ -209,3 +237,4 @@ router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
 });
 
 export default router;
+```0
