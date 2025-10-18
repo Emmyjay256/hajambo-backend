@@ -178,21 +178,35 @@ router.post("/:id/favourite", requireAuth, async (req, res) => {
   }
 });
 
-/** Comments: list delta + create (unchanged) */
+/** Comments: list with author fields */
 router.get("/:id/comments", requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
     const sinceMs = req.query.since ? Number(req.query.since) : null;
+
     const params = [postId];
-    const whereSince = sinceMs ? `AND c.created_at > $${params.push(new Date(sinceMs).toISOString())}` : "";
+    const whereSince = sinceMs
+      ? `AND c.created_at > $${params.push(new Date(sinceMs).toISOString())}`
+      : "";
+
     const r = await pool.query(
-      `SELECT c.id, c.post_id, c.user_id, c.body, EXTRACT(EPOCH FROM c.created_at)*1000 created_at_ms
+      `SELECT
+         c.id,
+         c.post_id,
+         c.user_id,
+         c.body,
+         EXTRACT(EPOCH FROM c.created_at)*1000 AS created_at_ms,
+         u.username AS author_username,
+         u.display_name AS author_display_name,
+         u.avatar_url AS author_avatar_url
        FROM comment c
+       JOIN app_user u ON u.id = c.user_id
        WHERE c.post_id=$1 ${whereSince}
        ORDER BY c.created_at ASC
        LIMIT 500`,
       params
     );
+
     res.json({
       items: r.rows.map(x => ({
         id: String(x.id),
@@ -200,6 +214,12 @@ router.get("/:id/comments", requireAuth, async (req, res) => {
         userId: String(x.user_id),
         body: x.body,
         createdAtMs: Number(x.created_at_ms),
+        author: {
+          id: String(x.user_id),
+          username: x.author_username || null,
+          displayName: x.author_display_name || null,
+          avatarUrl: x.author_avatar_url || null,
+        },
       })),
       serverNowMs: Date.now(),
     });
@@ -209,6 +229,7 @@ router.get("/:id/comments", requireAuth, async (req, res) => {
   }
 });
 
+/** Create comment (returns author fields too) */
 router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
   try {
     const postId = Number(req.params.id);
@@ -216,19 +237,33 @@ router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
     const body = (req.body?.body || "").trim();
     if (!body) return res.status(400).json({ error: "body required" });
 
-    const r = await pool.query(
+    const ins = await pool.query(
       `INSERT INTO comment (post_id, user_id, body) VALUES ($1,$2,$3)
-       RETURNING id, post_id, user_id, body, EXTRACT(EPOCH FROM created_at)*1000 created_at_ms`,
+       RETURNING id, post_id, user_id, body, EXTRACT(EPOCH FROM created_at)*1000 AS created_at_ms`,
       [postId, userId, body]
     );
     await pool.query(`UPDATE post SET comments_count = comments_count + 1 WHERE id=$1`, [postId]);
-    const c = r.rows[0];
+
+    // pull author for response
+    const au = await pool.query(
+      `SELECT username, display_name, avatar_url FROM app_user WHERE id=$1`,
+      [userId]
+    );
+    const author = au.rows[0] || {};
+    const c = ins.rows[0];
+
     res.status(201).json({
       id: String(c.id),
       postId: String(c.post_id),
       userId: String(c.user_id),
       body: c.body,
       createdAtMs: Number(c.created_at_ms),
+      author: {
+        id: String(c.user_id),
+        username: author.username || null,
+        displayName: author.display_name || null,
+        avatarUrl: author.avatar_url || null,
+      },
     });
   } catch (e) {
     console.error("POST /comments error:", e.message);
@@ -237,4 +272,3 @@ router.post("/:id/comments", requireAuth, express.json(), async (req, res) => {
 });
 
 export default router;
-```0
