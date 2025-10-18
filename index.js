@@ -6,6 +6,11 @@ import pool from "./db.js";
 import authRouter from "./routes/auth.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { requireAuth } from "./middleware/auth.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,6 +27,39 @@ app.post("/__debug_body", (req, res) => res.json({ body: req.body }));
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
+
+// ====== Uploads / Static ======
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Where to store files on disk
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// Multer storage: unique file names
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "");
+    const name = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    cb(null, name);
+  },
+});
+const upload = multer({ storage });
+
+// Serve the files back
+app.use("/uploads", express.static(UPLOAD_DIR, { maxAge: "30d", immutable: true }));
+
+// Public base (Cloudflare tunnel)
+const PUBLIC_BASE = (process.env.PUBLIC_BASE || "").replace(/\/+$/, "");
+
+// POST /upload (auth required)
+app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Missing file" });
+  const rel = `/uploads/${req.file.filename}`;
+  const url = PUBLIC_BASE ? `${PUBLIC_BASE}${rel}` : rel;
+  res.json({ url, path: rel });
+});
 
 
 // --- Africa's Talking client (no hardcoded creds) ---
