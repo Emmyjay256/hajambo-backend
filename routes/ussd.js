@@ -17,7 +17,6 @@ const messages = {
   },
 };
 
-// Helper: ensure user exists or create one
 async function ensureUser(phone, name = null) {
   const found = await pool.query(
     "SELECT id, username FROM ussd_user WHERE phone=$1 LIMIT 1",
@@ -27,7 +26,9 @@ async function ensureUser(phone, name = null) {
 
   const uname = name || `user_${phone.slice(-4)}`;
   const ins = await pool.query(
-    `INSERT INTO ussd_user (phone, username) VALUES ($1, $2)
+    `INSERT INTO ussd_user (phone, username)
+     VALUES ($1, $2)
+     ON CONFLICT (phone) DO UPDATE SET username = EXCLUDED.username
      RETURNING id, username`,
     [phone, uname]
   );
@@ -35,18 +36,21 @@ async function ensureUser(phone, name = null) {
 }
 
 async function savePost(userId, text) {
+  const trimmed = (text || "").slice(0, 160);
   await pool.query(
     `INSERT INTO posts (user_id, type, content, created_at)
      VALUES ($1, 'post', $2, NOW())`,
-    [userId, text]
+    [userId, trimmed]
   );
 }
 
 async function getFeed(limit = 3) {
   const r = await pool.query(
-    `SELECT p.content, u.username
+    `SELECT p.content,
+            COALESCE(u1.username, u2.username, 'Someone') AS username
      FROM posts p
-     LEFT JOIN ussd_user u ON u.id = p.user_id
+     LEFT JOIN ussd_user u1 ON u1.id = p.user_id
+     LEFT JOIN app_user  u2 ON u2.id = p.user_id
      WHERE p.type='post'
      ORDER BY p.created_at DESC
      LIMIT $1`,
@@ -57,7 +61,8 @@ async function getFeed(limit = 3) {
 
 async function getMyPosts(userId, limit = 3) {
   const r = await pool.query(
-    `SELECT content FROM posts
+    `SELECT content
+     FROM posts
      WHERE user_id=$1 AND type='post'
      ORDER BY created_at DESC
      LIMIT $2`,
@@ -66,81 +71,61 @@ async function getMyPosts(userId, limit = 3) {
   return r.rows;
 }
 
-// ----------------------------------
-// Main route
-// ----------------------------------
 router.post("/", async (req, res) => {
   const { phoneNumber, text } = req.body;
-  const parts = text.split("*").filter(Boolean);
-  let response = "";
+  const parts = (text || "").split("*").filter(Boolean);
   const lang = "en";
+  let response = "";
 
   try {
-    // Step 1: New session (no text)
     if (parts.length === 0) {
       const exists = await pool.query(
         "SELECT id FROM ussd_user WHERE phone=$1 LIMIT 1",
         [phoneNumber]
       );
-      if (exists.rowCount === 0) {
-        response = `CON ${messages[lang].askName}`;
-      } else {
-        response = `CON ${messages[lang].mainMenu}`;
-      }
+      response =
+        exists.rowCount === 0
+          ? `CON ${messages[lang].askName}`
+          : `CON ${messages[lang].mainMenu}`;
       res.set("Content-Type", "text/plain");
       return res.send(response);
     }
 
-    // Step 2: User entering name for first time
     if (parts.length === 1) {
       const name = parts[0].trim();
       if (name === "0") return res.send("END Bye!");
       await ensureUser(phoneNumber, name);
-      response = `CON ${messages[lang].mainMenu}`;
       res.set("Content-Type", "text/plain");
-      return res.send(response);
+      return res.send(`CON ${messages[lang].mainMenu}`);
     }
 
-    // Step 3: Load user safely
     const user = await ensureUser(phoneNumber);
-
-    // Step 4: Handle choices
     const choice = parts[1];
+
     if (parts.length === 2) {
-      switch (choice) {
-        case "1":
-          response = `CON ${messages[lang].enterPost}`;
-          break;
-        case "2": {
-          const feed = await getFeed();
-          if (feed.length === 0) {
-            response = `END ${messages[lang].feedEmpty}`;
-          } else {
-            const formatted = feed.map(messages[lang].feedEntry).join("\n");
-            response = `END Latest:\n${formatted}`;
-          }
-          break;
-        }
-        case "3": {
-          const mine = await getMyPosts(user.id);
-          if (mine.length === 0) {
-            response = `END ${messages[lang].myPostsEmpty}`;
-          } else {
-            const formatted = mine
-              .map((p, i) => `${i + 1}. ${p.content.slice(0, 50)}...`)
-              .join("\n");
-            response = `END Your posts:\n${formatted}`;
-          }
-          break;
-        }
-        case "0":
-          response = "END Bye!";
-          break;
-        default:
-          response = `END ${messages[lang].invalid}`;
+      if (choice === "1") {
+        response = `CON ${messages[lang].enterPost}`;
+      } else if (choice === "2") {
+        const feed = await getFeed();
+        response =
+          feed.length === 0
+            ? `END ${messages[lang].feedEmpty}`
+            : `END Latest:\n${feed.map(messages[lang].feedEntry).join("\n")}`;
+      } else if (choice === "3") {
+        const mine = await getMyPosts(user.id);
+        response =
+          mine.length === 0
+            ? `END ${messages[lang].myPostsEmpty}`
+            : `END Your posts:\n${mine
+                .map((p, i) => `${i + 1}. ${p.content.slice(0, 50)}...`)
+                .join("\n")}`;
+      } else if (choice === "0") {
+        response = "END Bye!";
+      } else {
+        response = `END ${messages[lang].invalid}`;
       }
-    } else if (parts.length === 3 && parts[1] === "1") {
-      const postText = parts[2];
+    } else if (parts.length === 3 && choice === "1") {
+      const postText = parts[2] || "";
       await savePost(user.id, postText);
       response = `END ${messages[lang].posted}`;
     } else {
