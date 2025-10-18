@@ -3,113 +3,151 @@ import pool from "../db.js";
 
 const router = express.Router();
 
-function cut(s, n) { return (s || "").replace(/\s+/g, " ").slice(0, n); }
+// -----------------------------
+// i18n setup (English only for now)
+// -----------------------------
+const messages = {
+  en: {
+    welcome: "Welcome to Hajambo!",
+    menu: "Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit",
+    enterName: "Enter your name (<=20)\n0. Exit",
+    thanksName: (name) => `Thanks ${name}! You are registered.`,
+    enterPost: "Type your post text (<=160)\n0. Exit",
+    posted: "Post saved! Thanks for sharing.",
+    feedEmpty: "No posts yet. Be the first to post!",
+    feedEntry: (p) => `${p.username}: ${p.content.slice(0, 50)}...`,
+    myPostsEmpty: "You haven’t posted anything yet.",
+    invalid: "Invalid choice.",
+  },
+};
 
-async function getUssdUser(phone) {
-  const r = await pool.query("SELECT * FROM ussd_user WHERE phone=$1", [phone]);
-  return r.rows[0] || null;
-}
-
-async function createUssdUser(phone, name) {
-  const r = await pool.query(
-    "INSERT INTO ussd_user (phone, display_name, language) VALUES ($1,$2,'en') RETURNING *",
-    [phone, name || "User"]
+// -----------------------------
+// Helpers
+// -----------------------------
+async function getOrCreateUser(phone, name = null, lang = "en") {
+  const found = await pool.query(
+    "SELECT id, username, lang FROM ussd_user WHERE phone=$1 LIMIT 1",
+    [phone]
   );
-  return r.rows[0];
+  if (found.rowCount > 0) return found.rows[0];
+
+  const uname = name || `user_${phone.slice(-4)}`;
+  const ins = await pool.query(
+    `INSERT INTO ussd_user (phone, username, lang)
+     VALUES ($1,$2,$3)
+     RETURNING id, username, lang`,
+    [phone, uname, lang]
+  );
+  return ins.rows[0];
 }
 
+async function savePost(userId, text) {
+  await pool.query(
+    `INSERT INTO posts (user_id, type, content, created_at)
+     VALUES ($1, 'post', $2, NOW())`,
+    [userId, text]
+  );
+}
+
+async function getFeed(limit = 3) {
+  const r = await pool.query(
+    `SELECT p.content, u.username
+     FROM posts p
+     JOIN app_user u ON u.id=p.user_id
+     WHERE p.type='post'
+     ORDER BY p.created_at DESC
+     LIMIT $1`,
+    [limit]
+  );
+  return r.rows;
+}
+
+async function getUserPosts(userId, limit = 3) {
+  const r = await pool.query(
+    `SELECT content FROM posts
+     WHERE user_id=$1 AND type='post'
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [userId, limit]
+  );
+  return r.rows;
+}
+
+// -----------------------------
+// Main USSD handler
+// -----------------------------
 router.post("/", async (req, res) => {
-  res.set("Content-Type", "text/plain");
-  const { phoneNumber, text } = req.body || {};
-  const parts = (text || "").split("*").filter(Boolean);
-  let u = await getUssdUser(phoneNumber);
+  const { sessionId, phoneNumber, text } = req.body;
+  const parts = text.split("*").filter((x) => x.length > 0);
 
-  if (!u) {
+  let response = "";
+  let lang = "en";
+
+  try {
+    // Handle flow
     if (parts.length === 0) {
-      return res.send("CON Enter your name (<=20)\n0. Exit");
+      response = `CON ${messages[lang].enterName}`;
+    } else if (parts.length === 1) {
+      const name = parts[0].trim();
+      if (name === "0") return res.send("END Bye!");
+      await getOrCreateUser(phoneNumber, name, lang);
+      response = `CON ${messages[lang].menu}`;
+    } else if (parts.length === 2) {
+      const [name, choice] = parts;
+      const user = await getOrCreateUser(phoneNumber, name, lang);
+
+      switch (choice) {
+        case "1":
+          response = `CON ${messages[lang].enterPost}`;
+          break;
+        case "2": {
+          const feed = await getFeed();
+          if (feed.length === 0)
+            response = `END ${messages[lang].feedEmpty}`;
+          else {
+            const formatted = feed.map(messages[lang].feedEntry).join("\n");
+            response = `END Latest:\n${formatted}`;
+          }
+          break;
+        }
+        case "3": {
+          const myPosts = await getUserPosts(user.id);
+          if (myPosts.length === 0)
+            response = `END ${messages[lang].myPostsEmpty}`;
+          else {
+            const formatted = myPosts
+              .map((p, i) => `${i + 1}. ${p.content.slice(0, 50)}...`)
+              .join("\n");
+            response = `END Your posts:\n${formatted}`;
+          }
+          break;
+        }
+        case "0":
+          response = "END Bye!";
+          break;
+        default:
+          response = `END ${messages[lang].invalid}`;
+      }
+    } else if (parts.length === 3) {
+      const [name, choice, data] = parts;
+      const user = await getOrCreateUser(phoneNumber, name, lang);
+
+      if (choice === "1") {
+        await savePost(user.id, data);
+        response = `END ${messages[lang].posted}`;
+      } else {
+        response = `END ${messages[lang].invalid}`;
+      }
+    } else {
+      response = `END ${messages[lang].invalid}`;
     }
-    if (parts[0] === "0") {
-      return res.send("END Bye");
-    }
-    const name = cut(parts[0], 20);
-    u = await createUssdUser(phoneNumber, name);
-    return res.send("CON Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit");
+
+    res.set("Content-Type", "text/plain");
+    res.send(response);
+  } catch (err) {
+    console.error("USSD error:", err.message);
+    res.status(200).send("END Internal error");
   }
-
-  if (parts.length === 0) {
-    return res.send("CON Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit");
-  }
-
-  const root = parts[0];
-
-  if (root === "0") {
-    return res.send("END Bye");
-  }
-
-  if (root === "1") {
-    if (parts.length === 1) {
-      return res.send("CON Type your post (<=240)\n0. Back");
-    }
-    if (parts[1] === "0") {
-      return res.send("CON Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit");
-    }
-    const content = cut(parts.slice(1).join("*"), 240);
-    if (!content) {
-      return res.send("CON Type your post (<=240)\n0. Back");
-    }
-    await pool.query(
-      "INSERT INTO post (ussd_user_id, type, content, created_at) VALUES ($1,'post',$2,now())",
-      [u.id, content]
-    );
-    return res.send("CON Posted!\n9. Home\n0. Back");
-  }
-
-  if (root === "2") {
-    const page = (parts[1] ? parseInt(parts[1], 10) : 1) || 1;
-    const pageSize = 3;
-    const offset = (page - 1) * pageSize;
-    const r = await pool.query(
-      `SELECT p.id, p.content, p.created_at,
-              COALESCE(au.display_name, uu.display_name, au.username, 'User') AS author
-         FROM post p
-         LEFT JOIN app_user au ON au.id = p.user_id
-         LEFT JOIN ussd_user uu ON uu.id = p.ussd_user_id
-        ORDER BY p.created_at DESC
-        LIMIT $1 OFFSET $2`,
-      [pageSize, offset]
-    );
-    if (r.rowCount === 0) {
-      return res.send("CON Feed\n(No posts)\n0. Back\n9. Home");
-    }
-    const lines = r.rows.map((row, i) => `${i + 1}. ${cut(row.author,18)}: ${cut(row.content, 82)}`);
-    lines.push("7. Next\n0. Back\n9. Home");
-    return res.send("CON " + ["Feed"].concat(lines).join("\n"));
-  }
-
-  if (root === "3") {
-    const r = await pool.query(
-      "SELECT id, content FROM post WHERE ussd_user_id=$1 ORDER BY created_at DESC LIMIT 3",
-      [u.id]
-    );
-    if (r.rowCount === 0) {
-      return res.send("CON My posts\n(None)\n0. Back\n9. Home");
-    }
-    const lines = r.rows.map((row, i) => `${i + 1}. ${cut(row.content, 96)}`);
-    lines.push("0. Back\n9. Home");
-    return res.send("CON " + ["My posts"].concat(lines).join("\n"));
-  }
-
-  if (root === "7") {
-    const prev = Number(parts[1] || "1");
-    const next = isNaN(prev) ? 2 : prev + 1;
-    return res.send(`CON Loading...\n2*${next}`);
-  }
-
-  if (root === "9") {
-    return res.send("CON Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit");
-  }
-
-  return res.send("CON Hajambo\n1. Post\n2. Feed\n3. My posts\n0. Exit");
 });
 
 export default router;
