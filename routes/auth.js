@@ -149,4 +149,55 @@ router.get("/me", requireAuth, async (req, res) => {
   }
 });
 
+// ---- PATCH /auth/me ----
+router.patch("/me", requireAuth, express.json(), async (req, res) => {
+  try {
+    const userId = req.user.sub; // comes from JWT
+    const { username, displayName, avatarUrl, bio } = req.body;
+
+    const updates = [];
+    const params = [];
+    if (username) {
+      params.push(username);
+      updates.push(`username = $${params.length}`);
+    }
+    if (displayName) {
+      params.push(displayName);
+      updates.push(`display_name = $${params.length}`);
+    }
+    if (avatarUrl) {
+      params.push(avatarUrl);
+      updates.push(`avatar_url = $${params.length}`);
+    }
+    if (bio) {
+      params.push(bio);
+      updates.push(`bio = $${params.length}`);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    params.push(userId);
+    const sql = `UPDATE app_user SET ${updates.join(", ")} WHERE id = $${params.length} RETURNING id, username, email, phone, display_name, avatar_url, bio, created_at`;
+    const r = await pool.query(sql, params);
+    if (r.rowCount === 0) return res.status(404).json({ error: "User not found" });
+
+    const u = r.rows[0];
+    res.json({
+      id: String(u.id),
+      username: u.username,
+      email: u.email,
+      phone: u.phone,
+      displayName: u.display_name,
+      avatarUrl: u.avatar_url,
+      bio: u.bio,
+      createdAt: u.created_at,
+    });
+  } catch (e) {
+    console.error("PATCH /auth/me error:", e.message);
+    res.status(500).json({ error: "Update failed" });
+  }
+});
+
 export default router;
