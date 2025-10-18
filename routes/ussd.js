@@ -69,12 +69,13 @@ async function ensureShadowAppUserForUssd(ussd) {
 }
 
 /** Save a post into public.post with BOTH user_id and ussd_user_id */
-async function savePost(appUserId, ussdUserId, text) {
+// 1) Replace savePost with this:
+async function savePost(appUserId, text) {
   const trimmed = (text || "").slice(0, 160);
   await pool.query(
-    `INSERT INTO post (user_id, ussd_user_id, type, content, created_at)
-     VALUES ($1, $2, 'post', $3, NOW())`,
-    [appUserId, ussdUserId, trimmed]
+    `INSERT INTO post (user_id, type, content, created_at)
+     VALUES ($1, 'post', $2, NOW())`,
+    [appUserId, trimmed]
   );
 }
 
@@ -182,13 +183,14 @@ router.post("/", async (req, res) => {
     }
 
     // Posting step: needs 2 segments after offset → choice + postText
-    if (choice === "1" && parts.length === offset + 2) {
-      const postText = parts[offset + 1] || "";
-      const appUserId = await ensureShadowAppUserForUssd(ussd);
-      await savePost(appUserId, ussd.id, postText);
-      res.set("Content-Type", "text/plain");
-      return res.send(`END ${messages[lang].posted}`);
-    }
+    // 2) In the posting branch, change the call:
+if (choice === "1" && parts.length === offset + 2) {
+  const postText = parts[offset + 1] || "";
+  const appUserId = await ensureShadowAppUserForUssd(ussd);
+  await savePost(appUserId, postText);   // <-- only user_id now
+  res.set("Content-Type", "text/plain");
+  return res.send(`END ${messages[lang].posted}`);
+}
 
     res.set("Content-Type", "text/plain");
     return res.send(`END ${messages[lang].invalid}`);
