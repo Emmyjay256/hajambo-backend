@@ -6,6 +6,7 @@ import pool from "./db.js";
 import authRouter from "./routes/auth.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
+import ussdRouter from "./routes/ussd.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -27,6 +28,7 @@ app.post("/__debug_body", (req, res) => res.json({ body: req.body }));
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
+app.use("/webhooks/ussd", ussdRouter);
 
 // ====== Uploads / Static ======
 const __filename = fileURLToPath(import.meta.url);
@@ -185,7 +187,7 @@ app.post("/webhooks/sms/dlr", requireWebhookToken, async (req, res) => {
 // ---------------------------
 // USSD (CON/END, text/plain)
 // ---------------------------
-app.post("/webhooks/ussd", requireWebhookToken, (req, res) => {
+app.post("/webhooks/ussd_legacy", requireWebhookToken, (req, res) => {
   const { sessionId, phoneNumber, text, serviceCode } = req.body;
   console.log("USSD Request:", { sessionId, phoneNumber, serviceCode, text });
 
