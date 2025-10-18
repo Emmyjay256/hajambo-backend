@@ -20,10 +20,7 @@ const messages = {
   },
 };
 
-/**
- * Ensure a row exists in ussd_user for this phone.
- * Returns { id, phone, username }.
- */
+/** Ensure a ussd_user row */
 async function ensureUssdUser(phone, name = null) {
   const found = await pool.query(
     "SELECT id, phone, username FROM ussd_user WHERE phone=$1 LIMIT 1",
@@ -31,28 +28,21 @@ async function ensureUssdUser(phone, name = null) {
   );
   if (found.rowCount > 0) return found.rows[0];
 
-  const safePhone = phone || "";
-  const uname =
+  const base =
     (name && name.trim().slice(0, 20)) ||
-    `user_${safePhone.slice(-4) || Math.floor(Math.random() * 10000)
-      .toString()
-      .padStart(4, "0")}`;
+    `user_${(phone || "").slice(-4).padStart(4, "0")}`;
 
   const ins = await pool.query(
     `INSERT INTO ussd_user (phone, username)
      VALUES ($1, $2)
      ON CONFLICT (phone) DO UPDATE SET username = EXCLUDED.username
      RETURNING id, phone, username`,
-    [phone, uname]
+    [phone, base]
   );
   return ins.rows[0];
 }
 
-/**
- * Create (once) a shadow app_user for a given ussd_user,
- * so app feeds keep using post.user_id → app_user.id.
- * Returns the shadow app_user.id.
- */
+/** Make (once) a shadow app_user so app feeds keep working unchanged */
 async function ensureShadowAppUserForUssd(ussd) {
   const existing = await pool.query(
     "SELECT id FROM app_user WHERE ussd_user_id=$1 LIMIT 1",
@@ -60,11 +50,11 @@ async function ensureShadowAppUserForUssd(ussd) {
   );
   if (existing.rowCount > 0) return existing.rows[0].id;
 
-  const base = (ussd.username || `user_${(ussd.phone || "").slice(-4)}`)
+  const unameBase = (ussd.username || `user_${(ussd.phone || "").slice(-4)}`)
     .toLowerCase()
     .replace(/[^a-z0-9_]/g, "_")
     .slice(0, 20);
-  const username = `${base}_${ussd.id}`; // avoid collisions
+  const username = `${unameBase}_${ussd.id}`;
 
   const randomPass = crypto.randomBytes(16).toString("hex");
   const hash = await bcrypt.hash(randomPass, 10);
@@ -78,11 +68,7 @@ async function ensureShadowAppUserForUssd(ussd) {
   return ins.rows[0].id;
 }
 
-/**
- * Insert a post into public.post, writing BOTH:
- *   - user_id       → shadow app_user.id (what the app expects)
- *   - ussd_user_id  → ussd_user.id (for provenance/analytics)
- */
+/** Save a post into public.post with BOTH user_id and ussd_user_id */
 async function savePost(appUserId, ussdUserId, text) {
   const trimmed = (text || "").slice(0, 160);
   await pool.query(
@@ -92,7 +78,7 @@ async function savePost(appUserId, ussdUserId, text) {
   );
 }
 
-/** Latest feed: prefer USSD username, then app username, else “Someone”. */
+/** Latest feed */
 async function getFeed(limit = 3) {
   const r = await pool.query(
     `SELECT p.content,
@@ -108,7 +94,7 @@ async function getFeed(limit = 3) {
   return r.rows;
 }
 
-/** Caller’s posts (works for both ussd_user.id and shadow app_user.id). */
+/** Caller’s posts (works for both ussd_user and its shadow app_user) */
 async function getMyPosts(ussdUserId, limit = 3) {
   const r = await pool.query(
     `SELECT content
@@ -130,32 +116,43 @@ router.post("/", async (req, res) => {
   const lang = "en";
 
   try {
-    // First screen: ask for name if first-time, else main menu
+    // Do we already know this user?
+    const exists = await pool.query(
+      "SELECT id FROM ussd_user WHERE phone=$1 LIMIT 1",
+      [phoneNumber]
+    );
+    const firstTime = exists.rowCount === 0;
+
+    // 0) First screen
     if (parts.length === 0) {
-      const exists = await pool.query(
-        "SELECT id FROM ussd_user WHERE phone=$1 LIMIT 1",
-        [phoneNumber]
-      );
-      const first = exists.rowCount === 0;
-      const screen = first ? messages[lang].askName : messages[lang].mainMenu;
+      const screen = firstTime ? messages[lang].askName : messages[lang].mainMenu;
       res.set("Content-Type", "text/plain");
       return res.send(`CON ${screen}`);
     }
 
-    // Name capture
-    if (parts.length === 1) {
-      const name = (parts[0] || "").trim().slice(0, 20);
+    // 1) Name capture (first-time only)
+    if (firstTime && parts.length === 1) {
+      const name = parts[0].trim().slice(0, 20);
       if (name === "0") return res.send("END Bye!");
       await ensureUssdUser(phoneNumber, name);
       res.set("Content-Type", "text/plain");
       return res.send(`CON ${messages[lang].mainMenu}`);
     }
 
-    // Past first step → ensure user present
-    const ussd = await ensureUssdUser(phoneNumber);
-    const choice = parts[1];
+    // After here: user exists for sure
+    const ussd = firstTime
+      ? await ensureUssdUser(phoneNumber, parts[0])
+      : await ensureUssdUser(phoneNumber);
 
-    if (parts.length === 2) {
+    // Dynamic offset:
+    // - firstTime session flow accumulates: "Name*1*Hello" → offset=1 (choice at parts[1])
+    // - returning user flow: "1*Hello" → offset=0 (choice at parts[0])
+    const offset = firstTime ? 1 : 0;
+
+    const choice = parts[offset] || "";
+    const hasOnlyChoice = parts.length === offset + 1;
+
+    if (hasOnlyChoice) {
       if (choice === "1") {
         res.set("Content-Type", "text/plain");
         return res.send(`CON ${messages[lang].enterPost}`);
@@ -184,9 +181,9 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // Posting flow: parts === 3 and choice === "1"
-    if (parts.length === 3 && choice === "1") {
-      const postText = parts[2] || "";
+    // Posting step: needs 2 segments after offset → choice + postText
+    if (choice === "1" && parts.length === offset + 2) {
+      const postText = parts[offset + 1] || "";
       const appUserId = await ensureShadowAppUserForUssd(ussd);
       await savePost(appUserId, ussd.id, postText);
       res.set("Content-Type", "text/plain");
