@@ -35,23 +35,25 @@ async function ensureUser(phone, name = null) {
   return ins.rows[0];
 }
 
+// savePost: write into public.post and fill BOTH user_id and ussd_user_id
 async function savePost(userId, text) {
   const trimmed = (text || "").slice(0, 160);
   await pool.query(
-    `INSERT INTO posts (user_id, type, content, created_at)
-     VALUES ($1, 'post', $2, NOW())`,
+    `INSERT INTO post (user_id, ussd_user_id, type, content, created_at)
+     VALUES ($1, $1, 'post', $2, NOW())`,
     [userId, trimmed]
   );
 }
 
+// getFeed: read from public.post; prefer ussd_user.username then app_user.username
 async function getFeed(limit = 3) {
   const r = await pool.query(
     `SELECT p.content,
             COALESCE(u1.username, u2.username, 'Someone') AS username
-     FROM posts p
-     LEFT JOIN ussd_user u1 ON u1.id = p.user_id
+     FROM post p
+     LEFT JOIN ussd_user u1 ON u1.id = p.ussd_user_id
      LEFT JOIN app_user  u2 ON u2.id = p.user_id
-     WHERE p.type='post'
+     WHERE p.type = 'post'
      ORDER BY p.created_at DESC
      LIMIT $1`,
     [limit]
@@ -59,18 +61,18 @@ async function getFeed(limit = 3) {
   return r.rows;
 }
 
+// getMyPosts: allow either ussd_user_id or user_id to match the caller
 async function getMyPosts(userId, limit = 3) {
   const r = await pool.query(
     `SELECT content
-     FROM posts
-     WHERE user_id=$1 AND type='post'
+     FROM post
+     WHERE (ussd_user_id = $1 OR user_id = $1) AND type = 'post'
      ORDER BY created_at DESC
      LIMIT $2`,
     [userId, limit]
   );
   return r.rows;
 }
-
 router.post("/", async (req, res) => {
   const { phoneNumber, text } = req.body;
   const parts = (text || "").split("*").filter(Boolean);
