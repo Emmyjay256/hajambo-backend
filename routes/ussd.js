@@ -34,6 +34,8 @@ const messages = {
     myPostsTitle: "Your posts",
     myPostsEmpty: "You haven’t posted anything yet.",
     navFooter: "8. Prev  9. Next\n00. Home  0. Exit",
+    // Detail view footer (Back to list without ending the session)
+    detailFooter: "8. Back\n00. Home  0. Exit",
     noMoreNext: "No more items.",
     noMorePrev: "No previous page.",
 
@@ -41,8 +43,7 @@ const messages = {
     invalid: "Invalid choice.",
     internalError: "Internal error",
   },
-  // Add other locales later, e.g.:
-  // sw: { ... }, lg: { ... }
+  // Future locales go here (e.g., sw, lg) with identical keys
 };
 
 /** Utility: safe access to locale (fallback to 'en' if missing) */
@@ -54,11 +55,11 @@ function t(lang, key) {
 /** Utility: preview text with ellipsis only if truncated */
 function preview(text, n = 50) {
   if (!text) return "";
-  const trimmed = String(text);
-  return trimmed.length > n ? trimmed.slice(0, n) + "..." : trimmed;
+  const s = String(text);
+  return s.length > n ? s.slice(0, n) + "..." : s;
 }
 
-/** Utility: per-page size for list screens */
+/** Utility: list size per page */
 const PAGE_SIZE = 3;
 
 /** Normalize username for shadow account */
@@ -71,7 +72,7 @@ function normalizeUsernameBase(username, phone) {
   return base;
 }
 
-/** Ensure a ussd_user row (now with language) */
+/** Ensure a ussd_user row (with language) */
 async function ensureUssdUser(phone, name = null, language = "en") {
   const found = await pool.query(
     "SELECT id, phone, username, language FROM ussd_user WHERE phone=$1 LIMIT 1",
@@ -126,7 +127,7 @@ async function ensureShadowAppUserForUssd(ussd) {
   return ins.rows[0].id;
 }
 
-/** Save a post into public.post (user_id only) — unchanged by request */
+/** Save a post into public.post (user_id only) — unchanged */
 async function savePost(appUserId, text) {
   const trimmed = (text || "").slice(0, 160);
   await pool.query(
@@ -186,37 +187,27 @@ async function getMyPostsPage(ussdUserId, page = 1) {
   return { items, hasNext };
 }
 
-/** NAVIGATION: interpret tail segments into a page number and action */
+/** Parse navigation segments to a page number and slot selection */
 function derivePageAndAction(segments) {
-  // segments: array after entering a section root ("2" for Feed, "3" for My posts)
-  // Recognized: "9"=next, "8"=prev, "00"=home, "1|2|3"=open item on current page
   let page = 1;
   let openSlot = null;
-  let wantsHome = false;
 
   for (const s of segments) {
-    if (s === "9") {
-      page += 1;
-    } else if (s === "8") {
-      page = Math.max(1, page - 1);
-    } else if (s === "00") {
-      wantsHome = true;
-    } else if (["1", "2", "3"].includes(s)) {
-      openSlot = Number(s); // 1..3
-    } else if (s === "0") {
-      // Exit handled at higher level
-      // no-op here
-    } else {
-      // Unknown tokens are ignored at this level; caller shows "Invalid choice."
-    }
+    if (s === "9") page += 1;
+    else if (s === "8") page = Math.max(1, page - 1);
+    else if (["1", "2", "3"].includes(s)) openSlot = Number(s);
   }
-
-  return { page, openSlot, wantsHome };
+  return { page, openSlot };
 }
 
-/** FIRST-TIME FLOW: language selection (only English enabled today) */
+/** Find the first slot token index within segments */
+function findSlotIndex(segments) {
+  const i = segments.findIndex((s) => ["1", "2", "3"].includes(s));
+  return i >= 0 ? i : null;
+}
+
+/** FIRST-TIME: language selection (English only for now) */
 function resolveFirstTimeLanguage(parts) {
-  // parts[0] should be language selection ("1" for English)
   if (!parts.length) return null;
   const langChoice = parts[0];
   if (langChoice === "1") return "en";
@@ -224,7 +215,7 @@ function resolveFirstTimeLanguage(parts) {
   return "INVALID";
 }
 
-/** Build a consistent list screen with nav footer */
+/** Compose list screen with footer */
 function buildListScreen(header, lines, footer) {
   const content = [header, ...lines, footer].filter(Boolean).join("\n");
   return content;
@@ -235,23 +226,18 @@ router.post("/", async (req, res) => {
   const { phoneNumber, text } = req.body || {};
   const rawParts = (text || "").split("*").filter(Boolean);
 
-  // Always respond in text/plain
   res.set("Content-Type", "text/plain");
 
   try {
-    // Does this user already exist?
     const existing = await pool.query(
       "SELECT id, phone, username, language FROM ussd_user WHERE phone=$1 LIMIT 1",
       [phoneNumber]
     );
     const userExists = existing.rowCount > 0;
 
-    // --------------------------
-    // 0) FIRST SCREEN (no input)
-    // --------------------------
+    // 0) First screen
     if (rawParts.length === 0) {
       if (!userExists) {
-        // First-time → Language selection (English only for now)
         return res.send(`CON ${t("en", "chooseLanguage")}`);
       } else {
         const ussd = existing.rows[0];
@@ -260,240 +246,235 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // ---------------------------------------
-    // FIRST-TIME USER: Language → Name → Menu
-    // ---------------------------------------
+    // First-time flow: Language -> Name -> Menu
     if (!userExists) {
-      // Step 1: Language selection
-      // parts[0] = "1" (English) or "0" (Exit) or invalid
       const langRes = resolveFirstTimeLanguage(rawParts);
-
-      if (langRes === "EXIT") {
-        return res.send(`END ${t("en", "goodbye")}`);
-      }
+      if (langRes === "EXIT") return res.send(`END ${t("en", "goodbye")}`);
       if (langRes === "INVALID" || langRes === null) {
-        // Re-show language screen with invalid note
-        return res.send(
-          `CON ${t("en", "invalid")}\n${t("en", "chooseLanguage")}`
-        );
+        return res.send(`CON ${t("en", "invalid")}\n${t("en", "chooseLanguage")}`);
       }
-
-      // From here: language chosen; parts may be:
-      // ["1"]                  → askName
-      // ["1", "<name>"]        → create user, show main menu
       const chosenLang = langRes; // 'en' today
-
       if (rawParts.length === 1) {
-        // Ask for name in chosen language
         return res.send(`CON ${t(chosenLang, "askName")}`);
       }
-
       // Name capture
       if (rawParts.length >= 2) {
         const name = (rawParts[1] || "").trim().slice(0, 20);
         if (name === "0") return res.send(`END ${t(chosenLang, "goodbye")}`);
-
-        // Create user with chosen language
         await ensureUssdUser(phoneNumber, name, chosenLang);
-        // Show main menu in chosen language
         return res.send(`CON ${t(chosenLang, "mainMenu")}`);
       }
     }
 
-    // ------------------------------------
-    // RETURNING USER (or post-onboarding)
-    // ------------------------------------
-    const ussd = existing.rows[0]; // present by here
+    // Returning user
+    const ussd = existing.rows[0];
     const lang = (ussd && ussd.language) || "en";
 
-    // OFFSET logic:
-    // - First-time session accumulates "1*Name*<choice>*..." → offset=2
-    // - Returning user flow: "<choice>*..." → offset=0
-    // Detect if this looks like a first-time long path within the same USSD session:
-    // If the first token is a language choice ("1") and second is a name (any non-empty not "0")
-    // but the user now continues with choices, treat offset=2.
+    // Offset heuristic for same-session long path (language + name)
     let offset = 0;
-    if (rawParts[0] === "1" && rawParts.length >= 2) {
-      offset = 2;
-    }
+    if (rawParts[0] === "1" && rawParts.length >= 2) offset = 2;
 
     const parts = rawParts;
     const choice = parts[offset] || "";
     const hasOnlyChoice = parts.length === offset + 1;
 
-    // Universal hard exits / home when given as the only segment
-    if (choice === "0" && hasOnlyChoice) {
-      return res.send(`END ${t(lang, "goodbye")}`);
-    }
-    if (choice === "00" && hasOnlyChoice) {
-      return res.send(`CON ${t(lang, "mainMenu")}`);
-    }
+    // Global exits/homes
+    if (choice === "0" && hasOnlyChoice) return res.send(`END ${t(lang, "goodbye")}`);
+    if (choice === "00" && hasOnlyChoice) return res.send(`CON ${t(lang, "mainMenu")}`);
 
-    // ----------------
-    // MAIN MENU ROUTES
-    // ----------------
+    // Main menu options
     if (hasOnlyChoice) {
       if (choice === "1") {
-        // Post
         return res.send(`CON ${t(lang, "enterPost")}`);
       } else if (choice === "2") {
-        // Feed page 1
-        const { items, hasNext } = await getFeedPage(1);
-        if (items.length === 0) {
-          return res.send(`END ${t(lang, "feedEmpty")}`);
-        }
+        const { items } = await getFeedPage(1);
+        if (items.length === 0) return res.send(`END ${t(lang, "feedEmpty")}`);
         const lines = items.map(
           (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
         );
-        const footer = t(lang, "navFooter");
-        const screen = buildListScreen(t(lang, "feedTitle"), lines, footer);
+        const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
         return res.send(`CON ${screen}`);
       } else if (choice === "3") {
-        // My posts page 1
-        const { items, hasNext } = await getMyPostsPage(ussd.id, 1);
-        if (items.length === 0) {
-          return res.send(`END ${t(lang, "myPostsEmpty")}`);
-        }
-        const lines = items.map(
-          (p, idx) => `${idx + 1}) ${preview(p.content, 50)}`
-        );
-        const footer = t(lang, "navFooter");
-        const screen = buildListScreen(t(lang, "myPostsTitle"), lines, footer);
+        const { items } = await getMyPostsPage(ussd.id, 1);
+        if (items.length === 0) return res.send(`END ${t(lang, "myPostsEmpty")}`);
+        const lines = items.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
+        const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
         return res.send(`CON ${screen}`);
       } else if (choice === "4") {
-        // Language change menu (English only for now)
         return res.send(`CON ${t(lang, "langMenu")}`);
       } else {
         return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "mainMenu")}`);
       }
     }
 
-    // -----------------
-    // POSTING BRANCH
-    // -----------------
+    // Posting flow
     if (choice === "1" && parts.length === offset + 2) {
       const postText = (parts[offset + 1] || "").trim();
-      if (postText === "0") {
-        // Exit during enterPost
-        return res.send(`END ${t(lang, "goodbye")}`);
-      }
+      if (postText === "0") return res.send(`END ${t(lang, "goodbye")}`);
       const appUserId = await ensureShadowAppUserForUssd(ussd);
       await savePost(appUserId, postText);
       return res.send(`END ${t(lang, "posted")}`);
     }
 
-    // -----------------
-    // FEED (PAGED) BRANCH
-    // Root = "2"; everything after it is nav
-    // -----------------
+    // FEED (paged + detail with Back)
     if (choice === "2") {
       const tail = parts.slice(offset + 1);
-      // Home/Exit short-circuit
+
+      // Home/Exit short-circuit anywhere in tail
       if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
       if (tail.includes("0")) return res.send(`END ${t(lang, "goodbye")}`);
 
       const { page, openSlot } = derivePageAndAction(tail);
-      const { items, hasNext } = await getFeedPage(page);
+      const slotIdx = findSlotIndex(tail); // index of 1|2|3 within tail
+      const afterSlot = slotIdx != null ? tail.slice(slotIdx + 1) : [];
+      const postAction = afterSlot[0] || null; // first action after opening detail
 
+      const { items } = await getFeedPage(page);
+
+      // If no items for computed page, step back gracefully
       if ((items || []).length === 0) {
-        // If user navigated past the end, step back to nearest valid page
         const { items: backItems } = await getFeedPage(Math.max(1, page - 1));
-        if (backItems.length === 0) {
-          return res.send(`END ${t(lang, "feedEmpty")}`);
-        } else {
-          const lines = backItems.map(
+        if (backItems.length === 0) return res.send(`END ${t(lang, "feedEmpty")}`);
+        const lines = backItems.map(
+          (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
+        );
+        const screen = buildListScreen(
+          `${t(lang, "feedTitle")}\n${t(lang, "noMoreNext")}`,
+          lines,
+          t(lang, "navFooter")
+        );
+        return res.send(`CON ${screen}`);
+      }
+
+      // DETAIL VIEW with Back
+      if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
+        // If user immediately pressed an action after opening detail:
+        if (postAction === "8") {
+          // Back to SAME PAGE list
+          const { items: listItems } = await getFeedPage(page);
+          const lines = listItems.map(
             (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
           );
-          const top = page > 1 ? t(lang, "noMoreNext") : "";
-          const screen = buildListScreen(
-            `${t(lang, "feedTitle")}${top ? `\n${top}` : ""}`,
-            lines,
-            t(lang, "navFooter")
-          );
+          const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
           return res.send(`CON ${screen}`);
+        } else if (postAction === "9") {
+          // Jump to NEXT PAGE list
+          const { items: nextItems } = await getFeedPage(page + 1);
+          if (nextItems.length === 0) {
+            const { items: listItems } = await getFeedPage(page);
+            const lines = listItems.map(
+              (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
+            );
+            const screen = buildListScreen(
+              `${t(lang, "feedTitle")}\n${t(lang, "noMoreNext")}`,
+              lines,
+              t(lang, "navFooter")
+            );
+            return res.send(`CON ${screen}`);
+          }
+          const lines = nextItems.map(
+            (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
+          );
+          const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
+          return res.send(`CON ${screen}`);
+        } else if (postAction === "00") {
+          return res.send(`CON ${t(lang, "mainMenu")}`);
+        } else if (postAction === "0") {
+          return res.send(`END ${t(lang, "goodbye")}`);
         }
-      }
 
-      // Open a specific item (1..3) on the current page
-      if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
+        // Show the detail screen (CON) with Back option
         const idx = openSlot - 1;
         const item = items[idx];
-        const body = `${item.username}\n"${item.content}"\n00. Home`;
-        return res.send(`END ${body}`);
+        const body = `${item.username}\n"${item.content}"\n${t(lang, "detailFooter")}`;
+        return res.send(`CON ${body}`);
       }
 
-      // Re-render the list page with footer
+      // LIST VIEW
       const lines = items.map(
         (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
       );
-
-      // If user tried prev on first page or next beyond last, prepend a small note.
-      // We can’t perfectly detect their exact last action without storing more,
-      // but we keep UX pleasant by showing page content regardless.
       const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
       return res.send(`CON ${screen}`);
     }
 
-    // -----------------
-    // MY POSTS (PAGED) BRANCH
-    // Root = "3"; everything after it is nav
-    // -----------------
+    // MY POSTS (paged + detail with Back)
     if (choice === "3") {
       const tail = parts.slice(offset + 1);
       if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
       if (tail.includes("0")) return res.send(`END ${t(lang, "goodbye")}`);
 
       const { page, openSlot } = derivePageAndAction(tail);
-      const { items, hasNext } = await getMyPostsPage(ussd.id, page);
+      const slotIdx = findSlotIndex(tail);
+      const afterSlot = slotIdx != null ? tail.slice(slotIdx + 1) : [];
+      const postAction = afterSlot[0] || null;
+
+      const { items } = await getMyPostsPage(ussd.id, page);
 
       if ((items || []).length === 0) {
         const { items: backItems } = await getMyPostsPage(ussd.id, Math.max(1, page - 1));
-        if (backItems.length === 0) {
-          return res.send(`END ${t(lang, "myPostsEmpty")}`);
-        } else {
-          const lines = backItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
-          const top = page > 1 ? t(lang, "noMoreNext") : "";
-          const screen = buildListScreen(
-            `${t(lang, "myPostsTitle")}${top ? `\n${top}` : ""}`,
-            lines,
-            t(lang, "navFooter")
-          );
-          return res.send(`CON ${screen}`);
-        }
+        if (backItems.length === 0) return res.send(`END ${t(lang, "myPostsEmpty")}`);
+        const lines = backItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
+        const screen = buildListScreen(
+          `${t(lang, "myPostsTitle")}\n${t(lang, "noMoreNext")}`,
+          lines,
+          t(lang, "navFooter")
+        );
+        return res.send(`CON ${screen}`);
       }
 
+      // DETAIL VIEW with Back
       if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
+        if (postAction === "8") {
+          const { items: listItems } = await getMyPostsPage(ussd.id, page);
+          const lines = listItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
+          const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
+          return res.send(`CON ${screen}`);
+        } else if (postAction === "9") {
+          const { items: nextItems } = await getMyPostsPage(ussd.id, page + 1);
+          if (nextItems.length === 0) {
+            const { items: listItems } = await getMyPostsPage(ussd.id, page);
+            const lines = listItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
+            const screen = buildListScreen(
+              `${t(lang, "myPostsTitle")}\n${t(lang, "noMoreNext")}`,
+              lines,
+              t(lang, "navFooter")
+            );
+            return res.send(`CON ${screen}`);
+          }
+          const lines = nextItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
+          const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
+          return res.send(`CON ${screen}`);
+        } else if (postAction === "00") {
+          return res.send(`CON ${t(lang, "mainMenu")}`);
+        } else if (postAction === "0") {
+          return res.send(`END ${t(lang, "goodbye")}`);
+        }
+
         const idx = openSlot - 1;
         const item = items[idx];
-        const body = `"${item.content}"\n00. Home`;
-        return res.send(`END ${body}`);
+        const body = `"${item.content}"\n${t(lang, "detailFooter")}`;
+        return res.send(`CON ${body}`);
       }
 
+      // LIST VIEW
       const lines = items.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
       const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
       return res.send(`CON ${screen}`);
     }
 
-    // -----------------
-    // LANGUAGE CHANGE BRANCH
-    // Root = "4"
-    // -----------------
+    // LANGUAGE CHANGE
     if (choice === "4") {
       const tail = parts.slice(offset + 1);
       if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
       if (tail.includes("0")) return res.send(`END ${t(lang, "goodbye")}`);
 
-      // Only English is available now
       const sel = tail[0];
-      if (!sel) {
-        return res.send(`CON ${t(lang, "langMenu")}`);
-      }
+      if (!sel) return res.send(`CON ${t(lang, "langMenu")}`);
       if (sel === "1") {
         await setUssdLanguage(ussd.id, "en");
         return res.send(`END ${t("en", "langChanged")}`);
       }
-
-      // Any other input → show menu again with invalid
       return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
     }
 
@@ -501,7 +482,6 @@ router.post("/", async (req, res) => {
     return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "mainMenu")}`);
   } catch (err) {
     console.error("USSD error:", err);
-    // Reply 200 with END for USSD gateways
     return res.status(200).send(`END ${messages.en.internalError}`);
   }
 });
