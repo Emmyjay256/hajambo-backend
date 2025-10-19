@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 // ✅ global middleware FIRST
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static('/home/user/hajambo-down'));
 app.use(express.urlencoded({ extended: true }));
 
 // (optional) debug to confirm body parsing
