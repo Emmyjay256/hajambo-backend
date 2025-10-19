@@ -4,6 +4,7 @@ import cors from "cors";
 import africastalking from "africastalking";
 import pool from "./db.js";
 import authRouter from "./routes/auth.js";
+import usersRouter from "./routes/users.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
 import ussdRouter from "./routes/ussd.js";
@@ -29,6 +30,7 @@ app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
 app.use("/webhooks/ussd", ussdRouter);
+app.use("/users", usersRouter);
 
 // ====== Uploads / Static ======
 const __filename = fileURLToPath(import.meta.url);
