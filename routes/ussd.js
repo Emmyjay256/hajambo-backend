@@ -234,6 +234,16 @@ function t(lang, key) {
   return (loc && loc[key]) || messages.en[key];
 }
 
+// helper (place near other helpers)
+function normalizeDigitToken(s) {
+  // Trim spaces; preserve "00" (Home). Otherwise strip leading zeros, keep last digit.
+  const v = (s || "").trim();
+  if (v === "00") return "00";
+  // common cases: "3", " 3", "03" -> "3"
+  const m = v.match(/^\s*0*([1-9])\s*$/);
+  return m ? m[1] : v;  // if it looks like a single 1..9 digit (with/without leading 0), return that digit
+}
+
 /** Utility: preview text with ellipsis only if truncated */
 function preview(text, n = 50) {
   if (!text) return "";
@@ -391,9 +401,9 @@ function findSlotIndex(segments) {
 /** FIRST-TIME: language selection (English only for now) */
 function resolveFirstTimeLanguage(parts) {
   if (!parts.length) return null;
-  const choice = parts[0];
-  if (choice === "0") return "EXIT";
-  return LANG_OPTIONS[choice] || "INVALID";
+  const first = normalizeDigitToken(parts[0]);
+  if (first === "0")  return "EXIT";
+  return LANG_OPTIONS[first] || "INVALID";
 }
 
 /** Compose list screen with footer */
@@ -453,8 +463,6 @@ router.post("/", async (req, res) => {
 
     // Offset heuristic for same-session long path (language + name)
     let offset = 0;
-// If the first segment is a language selection (1–7) and user also sent a name,
-// then subsequent choices start after two segments.
 if (LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
   offset = 2;
 }
@@ -648,21 +656,27 @@ if (LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
     }
 
     // LANGUAGE CHANGE
-    if (choice === "4") {
+    // LANGUAGE CHANGE
+if (choice === "4") {
   const tail = parts.slice(offset + 1);
-  if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
-  if (tail.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
 
-  const sel = tail[0];                  // "1".."7"
-  if (!sel) return res.send(`CON ${t(lang, "langMenu")}`);
+  // normalize tokens first
+  const tokens = tail.map(normalizeDigitToken);
 
+  if (tokens.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
+  if (tokens.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
+
+  const selRaw = tokens[0];
+  if (!selRaw) return res.send(`CON ${t(lang, "langMenu")}`);
+
+  const sel = normalizeDigitToken(selRaw);     // ← final guard
   const target = LANG_OPTIONS[sel];
+
   if (!target) {
     return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
   }
 
   await setUssdLanguage(ussd.id, target);
-  // Confirm in the *target* language so the user instantly sees the switch
   return res.send(`END ${t(target, "langChanged")}`);
 }
 
