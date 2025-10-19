@@ -16,11 +16,11 @@ const router = express.Router();
 const messages = {
   en: {
     // Onboarding & navigation
-    chooseLanguage: "Choose language:\n1. English\n0. Exit",
+    chooseLanguage: "Choose language:\n1. English\n2. Swahili\n0. Exit",
     welcome: "Welcome to Hajambo!",
     askName: "Enter your name (<=20)\n0. Exit",
     mainMenu: "Hajambo\n1. Post\n2. Feed\n3. My posts\n4. Language\n0. Exit",
-    langMenu: "Choose language:\n1. English\n00. Home  0. Exit",
+    langMenu: "Choose language:\n1. English\n2. Swahili\n00. Home  0. Exit",
     langChanged: "Language updated.",
     goodbye: "Bye!",
 
@@ -43,7 +43,37 @@ const messages = {
     invalid: "Invalid choice.",
     internalError: "Internal error",
   },
+  
   // Future locales go here (e.g., sw, lg) with identical keys
+};
+
+messages.sw = {
+  // Uboreshaji & urambazaji
+  chooseLanguage: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n0. Toka",
+  welcome: "Karibu Hajambo!",
+  askName: "Weka jina lako (<=20)\n0. Toka",
+  mainMenu: "Hajambo\n1. Chapisha\n2. Mkusanyiko\n3. Machapisho yangu\n4. Lugha\n0. Toka",
+  langMenu: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n00. Mwanzo  0. Toka",
+  langChanged: "Lugha imesasishwa.",
+  goodbye: "Kwa heri!",
+
+  // Uchapishaji
+  enterPost: "Andika maandishi ya chapisho (<=160)\n0. Toka",
+  posted: "Chapisho limehifadhiwa! Asante kwa kushiriki.",
+
+  // Mkusanyiko / Chapisho langu
+  feedTitle: "Mkusanyiko Mpya",
+  feedEmpty: "Bado hakuna chapisho. Anza wewe!",
+  myPostsTitle: "Machapisho yako",
+  myPostsEmpty: "Bado hujaposti chochote.",
+  navFooter: "8. Nyuma  9. Ifuatayo\n00. Mwanzo  0. Toka",
+  detailFooter: "8. Nyuma\n00. Mwanzo  0. Toka",
+  noMoreNext: "Hakuna zaidi.",
+  noMorePrev: "Hakuna ukurasa wa nyuma.",
+
+  // Jumla
+  invalid: "Chaguo si sahihi.",
+  internalError: "Hitilafu ya ndani",
 };
 
 /** Utility: safe access to locale (fallback to 'en' if missing) */
@@ -209,9 +239,10 @@ function findSlotIndex(segments) {
 /** FIRST-TIME: language selection (English only for now) */
 function resolveFirstTimeLanguage(parts) {
   if (!parts.length) return null;
-  const langChoice = parts[0];
-  if (langChoice === "1") return "en";
-  if (langChoice === "0") return "EXIT";
+  const choice = parts[0];
+  if (choice === "1") return "en";
+  if (choice === "2") return "sw";   // ← add this
+  if (choice === "0") return "EXIT";
   return "INVALID";
 }
 
@@ -472,9 +503,13 @@ router.post("/", async (req, res) => {
       const sel = tail[0];
       if (!sel) return res.send(`CON ${t(lang, "langMenu")}`);
       if (sel === "1") {
-        await setUssdLanguage(ussd.id, "en");
-        return res.send(`END ${t("en", "langChanged")}`);
-      }
+  await setUssdLanguage(ussd.id, "en");
+  return res.send(`END ${t("en", "langChanged")}`);
+}
+if (sel === "2") {                     // ← add this
+  await setUssdLanguage(ussd.id, "sw");
+  return res.send(`END ${t("sw", "langChanged")}`);
+}
       return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
     }
 
