@@ -8,6 +8,7 @@ import usersRouter from "./routes/users.js";
 import postsRouter from "./routes/posts.js";
 import messagesRouter from "./routes/messages.js";
 import ussdRouter from "./routes/ussd.js";
+import conversationsRouter from "./routes/conversations.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -31,6 +32,7 @@ app.use("/posts", postsRouter);
 app.use("/messages", messagesRouter);
 app.use("/webhooks/ussd", ussdRouter);
 app.use("/users", usersRouter);
+app.use("/conversations", conversationsRouter);
 
 // ====== Uploads / Static ======
 const __filename = fileURLToPath(import.meta.url);
