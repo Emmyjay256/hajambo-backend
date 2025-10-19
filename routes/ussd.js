@@ -5,6 +5,16 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 
 const router = express.Router();
+// LOG: every POST hit to this router
+router.use((req, _res, next) => {
+  if (req.method === "POST") {
+    console.log("[USSD HIT]", {
+      phone: req.body?.phoneNumber,
+      text: req.body?.text
+    });
+  }
+  next();
+});
 
 /**
  * MESSAGE CATALOG
@@ -415,8 +425,14 @@ function buildListScreen(header, lines, footer) {
 /** MAIN ROUTE */
 router.post("/", async (req, res) => {
   const { phoneNumber, text } = req.body || {};
-  const rawParts = (text || "").split("*").filter(Boolean);
+  // (optional but recommended) trim each segment
+const rawParts = (text || "")
+  .split("*")
+  .map(s => (s || "").trim())
+  .filter(Boolean);
 
+// LOG: what we parsed from the gateway text
+console.log("[USSD PARTS]", { rawParts });
   res.set("Content-Type", "text/plain");
 
   try {
@@ -439,11 +455,16 @@ router.post("/", async (req, res) => {
 
     // First-time flow: Language -> Name -> Menu
     if (!userExists) {
-      const langRes = resolveFirstTimeLanguage(rawParts);
-      if (langRes === "EXIT") return res.send(`END ${t("en", "goodbye")}`);
-      if (langRes === "INVALID" || langRes === null) {
-        return res.send(`CON ${t("en", "invalid")}\n${t("en", "chooseLanguage")}`);
-      }
+  const langRes = resolveFirstTimeLanguage(rawParts);
+  if (langRes === "EXIT") return res.send(`END ${t("en", "goodbye")}`);
+  if (langRes === "INVALID" || langRes === null) {
+    console.warn("[FIRSTTIME_INVALID]", {
+      rawParts,
+      normalizedFirst: normalizeDigitToken(rawParts[0] || ""),
+      resolved: langRes
+    });
+    return res.send(`CON ${t("en", "invalid")}\n${t("en", "chooseLanguage")}`);
+  }
       const chosenLang = langRes; // 'en' today
       if (rawParts.length === 1) {
         return res.send(`CON ${t(chosenLang, "askName")}`);
@@ -657,11 +678,18 @@ if (LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
 
     // LANGUAGE CHANGE
     // LANGUAGE CHANGE
+// LANGUAGE CHANGE
 if (choice === "4") {
   const tail = parts.slice(offset + 1);
 
   // normalize tokens first
   const tokens = tail.map(normalizeDigitToken);
+
+  // LOG: show tokens before we interpret
+  console.log("[LANG_CHANGE]", {
+    rawTail: tail,
+    normTail: tokens
+  });
 
   if (tokens.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
   if (tokens.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
@@ -669,10 +697,19 @@ if (choice === "4") {
   const selRaw = tokens[0];
   if (!selRaw) return res.send(`CON ${t(lang, "langMenu")}`);
 
-  const sel = normalizeDigitToken(selRaw);     // ← final guard
+  const sel = normalizeDigitToken(selRaw);     // final guard
   const target = LANG_OPTIONS[sel];
 
   if (!target) {
+    // LOG: this is the exact spot where INVALID is returned by JS in the lang menu
+    console.warn("[LANG_INVALID]", {
+      phone: phoneNumber,
+      selRaw,
+      sel,
+      tokens,
+      lang,
+      LANG_OPTIONS
+    });
     return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
   }
 
@@ -681,6 +718,14 @@ if (choice === "4") {
 }
 
     // Fallback
+    // LOG: final fallback before returning INVALID
+console.warn("[FALLBACK_INVALID]", {
+  phone: phoneNumber,
+  lang,
+  choice,
+  offset,
+  parts
+});
     return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "mainMenu")}`);
   } catch (err) {
     console.error("USSD error:", err);
