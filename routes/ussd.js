@@ -483,8 +483,9 @@ console.log("[USSD PARTS]", { rawParts });
     const lang = (ussd && ussd.language) || "en";
 
     // Offset heuristic for same-session long path (language + name)
-    let offset = 0;
-if (LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
+  // Offset heuristic (only used in first-time signup, not normal menu)
+let offset = 0;
+if (!userExists && LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
   offset = 2;
 }
     const parts = rawParts;
