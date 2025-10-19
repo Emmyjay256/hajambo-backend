@@ -16,11 +16,11 @@ const router = express.Router();
 const messages = {
   en: {
     // Onboarding & navigation
-    chooseLanguage: "Choose language:\n1. English\n2. Swahili\n0. Exit",
+    chooseLanguage: "Choose language:\n1. English\n2. Swahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Exit",
     welcome: "Welcome to Hajambo!",
     askName: "Enter your name (<=20)\n0. Exit",
     mainMenu: "Hajambo\n1. Post\n2. Feed\n3. My posts\n4. Language\n0. Exit",
-    langMenu: "Choose language:\n1. English\n2. Swahili\n00. Home  0. Exit",
+    langMenu: "Choose language:\n1. English\n2. Swahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Home  0. Exit",
     langChanged: "Language updated.",
     goodbye: "Bye!",
 
@@ -49,11 +49,11 @@ const messages = {
 
 messages.sw = {
   // Uboreshaji & urambazaji
-  chooseLanguage: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n0. Toka",
+  chooseLanguage: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Toka",
   welcome: "Karibu Hajambo!",
   askName: "Weka jina lako (<=20)\n0. Toka",
   mainMenu: "Hajambo\n1. Chapisha\n2. Mkusanyiko\n3. Machapisho yangu\n4. Lugha\n0. Toka",
-  langMenu: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n00. Mwanzo  0. Toka",
+  langMenu: "Chagua lugha:\n1. Kiingereza\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Mwanzo  0. Toka",
   langChanged: "Lugha imesasishwa.",
   goodbye: "Kwa heri!",
 
@@ -74,6 +74,158 @@ messages.sw = {
   // Jumla
   invalid: "Chaguo si sahihi.",
   internalError: "Hitilafu ya ndani",
+};
+
+messages.lg = {
+  // Onboarding & navigation
+  chooseLanguage: "Londa olulimi:\n1. Lungereza\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Ffuluma",
+  welcome: "Tukwanirizza ku Hajambo!",
+  askName: "Wandika linnya lyo (<=20)\n0. Ffuluma",
+  mainMenu: "Hajambo\n1. Wandiika\n2. Ebipya\n3. Obubaka bwange\n4. Olulimi\n0. Ffuluma",
+  langMenu: "Londa olulimi:\n1. Lungereza\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Ewaka  0. Ffuluma",
+  langChanged: "Olulimi lukoleddwa.",
+  goodbye: "Weeraba!",
+
+  // Posting
+  enterPost: "Wandiika obubaka (<=160)\n0. Ffuluma",
+  posted: "Obubaka buteekeddwa! Webale okusangiza.",
+
+  // Feed / My posts
+  feedTitle: "Ebipya",
+  feedEmpty: "Tewali bubaka kati. Tandika ggwe!",
+  myPostsTitle: "Obubaka bwo",
+  myPostsEmpty: "Tonna wandiika bubaka.",
+  navFooter: "8. Mabega  9. Mumaaso\n00. Ewaka  0. Ffuluma",
+  detailFooter: "8. Mabega\n00. Ewaka  0. Ffuluma",
+  noMoreNext: "Tewali bya mumaaso.",
+  noMorePrev: "Tewali bya mabega.",
+
+  // General
+  invalid: "Ky’owadde si kituufu.",
+  internalError: "Ensobi mu sisitemu",
+};
+
+messages.rnk = {
+  // Onboarding & navigation
+  chooseLanguage: "Hitamo orurimi:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Kuvaho",
+  welcome: "Tukakuhingiriza ku Hajambo!",
+  askName: "Wandika erinya ryawe (<=20)\n0. Kuvaho",
+  mainMenu: "Hajambo\n1. Wandika\n2. Ebipya\n3. Ebiwandikire byawe\n4. Orurimi\n0. Kuvaho",
+  langMenu: "Hitamo orurimi:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Ahotandikiire  0. Kuvaho",
+  langChanged: "Orurimi rurahinduwe.",
+  goodbye: "Kare!",
+
+  // Posting
+  enterPost: "Wandika ekiragiro (<=160)\n0. Kuvaho",
+  posted: "Ekiragiro kyateerwaho. Webare okuhangayo.",
+
+  // Feed / My posts
+  feedTitle: "Ebipya",
+  feedEmpty: "Tihariho kyateerwaho. Tangira we!",
+  myPostsTitle: "Ebiwandikire byawe",
+  myPostsEmpty: "Otariwandikaho kyawe.",
+  navFooter: "8. Emyuma  9. Ehareyo\n00. Ahotandikiire  0. Kuvaho",
+  detailFooter: "8. Emyuma\n00. Ahotandikiire  0. Kuvaho",
+  noMoreNext: "Tihariho ebindi.",
+  noMorePrev: "Tihariho eby’emabega.",
+
+  // General
+  invalid: "Ekihitamo tekirukwata.",
+  internalError: "Ensobi ya munda",
+};
+messages.nyr = {
+  // Onboarding & navigation
+  chooseLanguage: "Hitamu orurimi:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Kuvaho",
+  welcome: "Tukakwasa ku Hajambo!",
+  askName: "Wandika erinya ryaawe (<=20)\n0. Kuvaho",
+  mainMenu: "Hajambo\n1. Wandika\n2. Ebipya\n3. Ebiwandikire byange\n4. Orurimi\n0. Kuvaho",
+  langMenu: "Hitamu orurimi:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Eka  0. Kuvaho",
+  langChanged: "Orurimi rurakyusibwa.",
+  goodbye: "Kare ntya!",
+
+  // Posting
+  enterPost: "Wandika obubaka (<=160)\n0. Kuvaho",
+  posted: "Obubaka bwateerwaho. Webale kusangiza.",
+
+  // Feed / My posts
+  feedTitle: "Ebipya",
+  feedEmpty: "Tihariho bubaka. Tangira we!",
+  myPostsTitle: "Ebiwandikire byawe",
+  myPostsEmpty: "Tihariho by’owandikire.",
+  navFooter: "8. Emyuma  9. Ehareyo\n00. Eka  0. Kuvaho",
+  detailFooter: "8. Emyuma\n00. Eka  0. Kuvaho",
+  noMoreNext: "Tihariho ebindi.",
+  noMorePrev: "Tihariho eby’emabega.",
+
+  // General
+  invalid: "Ekihitamu si kya mazima.",
+  internalError: "Ensobi ya munda",
+};
+messages.ach = {
+  // Onboarding & navigation
+  chooseLanguage: "Yer leb:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Wek",
+  welcome: "Itye maber i Hajambo!",
+  askName: "Coyo nying mii (<=20)\n0. Wek",
+  mainMenu: "Hajambo\n1. Coyo\n2. Gin manyen\n3. Gin ma in ocoyo\n4. Leb\n0. Wek",
+  langMenu: "Yer leb:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Gang  0. Wek",
+  langChanged: "Leb ocuke.",
+  goodbye: "Wot maber!",
+
+  // Posting
+  enterPost: "Coyo lok me post (<=160)\n0. Wek",
+  posted: "Post otingo! Erokamano.",
+
+  // Feed / My posts
+  feedTitle: "Gin manyen",
+  feedEmpty: "Pe tye gin kombedi. Cak in!",
+  myPostsTitle: "Post me in",
+  myPostsEmpty: "Pe itye ki post.",
+  navFooter: "8. Cen  9. Anyim\n00. Gang  0. Wek",
+  detailFooter: "8. Cen\n00. Gang  0. Wek",
+  noMoreNext: "Pe tye anyim.",
+  noMorePrev: "Pe tye cen.",
+
+  // General
+  invalid: "Ayera pe tye atir.",
+  internalError: "Bal i wang jami",
+};
+messages.teo = {
+  // Onboarding & navigation
+  chooseLanguage: "Kainet aŋasetetei:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n0. Erukut",
+  welcome: "Ejokai a Hajambo!",
+  askName: "Itai etelei ijo (<=20)\n0. Erukut",
+  mainMenu: "Hajambo\n1. Aikipore\n2. Ejakait loŋon\n3. Aikipore akwap\n4. Aŋasetetei\n0. Erukut",
+  langMenu: "Kainet aŋasetetei:\n1. English\n2. Kiswahili\n3. Luganda\n4. Runyankore–Rukiga\n5. Runyoro–Rutooro\n6. Acholi\n7. Ateso\n00. Eitunga  0. Erukut",
+  langChanged: "Aŋasetetei akokinos.",
+  goodbye: "Ejai!",
+
+  // Posting
+  enterPost: "Aikipore etelei (<=160)\n0. Erukut",
+  posted: "Etelei ekone! Ape " + "apena.", // "Ape apena" = thanks (best-effort)
+
+  // Feed / My posts
+  feedTitle: "Ejakait loŋon",
+  feedEmpty: "Ainakin kaɲei. Akiŋori in!",
+  myPostsTitle: "Etelei akwap",
+  myPostsEmpty: "Ijo pe aikipore.",
+  navFooter: "8. Ebong  9. Eyauni\n00. Eitunga  0. Erukut",
+  detailFooter: "8. Ebong\n00. Eitunga  0. Erukut",
+  noMoreNext: "Pe iyai eyauni.",
+  noMorePrev: "Pe iyai ebong.",
+
+  // General
+  invalid: "Akapo itunga aiyai.",
+  internalError: "Kekiro iŋomu",
+};
+
+    const LANG_OPTIONS = {
+  "1": "en",
+  "2": "sw",
+  "3": "lg",
+  "4": "rnk",
+  "5": "nyr",
+  "6": "ach",
+  "7": "teo",
 };
 
 /** Utility: safe access to locale (fallback to 'en' if missing) */
@@ -240,10 +392,8 @@ function findSlotIndex(segments) {
 function resolveFirstTimeLanguage(parts) {
   if (!parts.length) return null;
   const choice = parts[0];
-  if (choice === "1") return "en";
-  if (choice === "2") return "sw";   // ← add this
   if (choice === "0") return "EXIT";
-  return "INVALID";
+  return LANG_OPTIONS[choice] || "INVALID";
 }
 
 /** Compose list screen with footer */
@@ -303,8 +453,11 @@ router.post("/", async (req, res) => {
 
     // Offset heuristic for same-session long path (language + name)
     let offset = 0;
-    if (rawParts[0] === "1" && rawParts.length >= 2) offset = 2;
-
+// If the first segment is a language selection (1–7) and user also sent a name,
+// then subsequent choices start after two segments.
+if (LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
+  offset = 2;
+}
     const parts = rawParts;
     const choice = parts[offset] || "";
     const hasOnlyChoice = parts.length === offset + 1;
@@ -496,22 +649,22 @@ router.post("/", async (req, res) => {
 
     // LANGUAGE CHANGE
     if (choice === "4") {
-      const tail = parts.slice(offset + 1);
-      if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
-      if (tail.includes("0")) return res.send(`END ${t(lang, "goodbye")}`);
+  const tail = parts.slice(offset + 1);
+  if (tail.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
+  if (tail.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
 
-      const sel = tail[0];
-      if (!sel) return res.send(`CON ${t(lang, "langMenu")}`);
-      if (sel === "1") {
-  await setUssdLanguage(ussd.id, "en");
-  return res.send(`END ${t("en", "langChanged")}`);
+  const sel = tail[0];                  // "1".."7"
+  if (!sel) return res.send(`CON ${t(lang, "langMenu")}`);
+
+  const target = LANG_OPTIONS[sel];
+  if (!target) {
+    return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
+  }
+
+  await setUssdLanguage(ussd.id, target);
+  // Confirm in the *target* language so the user instantly sees the switch
+  return res.send(`END ${t(target, "langChanged")}`);
 }
-if (sel === "2") {                     // ← add this
-  await setUssdLanguage(ussd.id, "sw");
-  return res.send(`END ${t("sw", "langChanged")}`);
-}
-      return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "langMenu")}`);
-    }
 
     // Fallback
     return res.send(`CON ${t(lang, "invalid")}\n${t(lang, "mainMenu")}`);
