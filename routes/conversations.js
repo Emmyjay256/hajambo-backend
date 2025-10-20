@@ -34,19 +34,30 @@ router.post(
       );
       if (q.rowCount > 0) return res.json({ conversationId: q.rows[0].id });
 
-      const c = await pool.query(
-        "INSERT INTO conversation (title, is_group) VALUES ($1,false) RETURNING id",
-        [title]
-      );
-      const convoId = c.rows[0].id;
+      // If client sent a convoId, use it; otherwise build deterministic (order-independent) one
+const clientId = req.body.conversationId ? BigInt(req.body.conversationId) : null;
+const lower = Math.min(selfId, otherId);
+const higher = Math.max(selfId, otherId);
+const deterministicId = BigInt("1" + String(lower).padStart(4,"0") + String(higher).padStart(4,"0"));
+const finalId = (clientId ?? deterministicId).toString();
 
-      await pool.query(
-        `INSERT INTO conversation_participant (conversation_id, user_id, role)
-         VALUES ($1,$2,'member'), ($1,$3,'member')`,
-        [convoId, selfId, otherId]
-      );
+// Create conversation if missing (no auto-id; safe on duplicates)
+await pool.query(
+  `INSERT INTO conversation (id, title, is_group)
+   VALUES ($1, $2, false)
+   ON CONFLICT (id) DO NOTHING`,
+  [finalId, title]
+);
 
-      return res.status(201).json({ conversationId: convoId });
+// Ensure both participants exist (idempotent)
+await pool.query(
+  `INSERT INTO conversation_participant (conversation_id, user_id, role)
+   VALUES ($1,$2,'member'), ($1,$3,'member')
+   ON CONFLICT (conversation_id, user_id) DO NOTHING`,
+  [finalId, selfId, otherId]
+);
+
+return res.status(201).json({ conversationId: finalId });
     } catch (e) {
       console.error("ensure-direct error:", e.message);
       return res.status(500).json({ error: "Failed to ensure conversation" });
