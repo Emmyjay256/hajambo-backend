@@ -707,7 +707,7 @@ if ((comments || []).length === 0) {
     const lines = comments.map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
     const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
     return res.send(`CON ${screen}`);
-  }
+
   } else if (postAction === "6") {
   // REPLY FLOW
   const afterReply = afterSlot.slice(1); // tokens after pressing "6"
@@ -844,7 +844,7 @@ if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) 
     const lines = comments.map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
     const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
     return res.send(`CON ${screen}`);
-  }
+  
   } else if (postAction === "6") {
   // REPLY FLOW
   const afterReply = afterSlot.slice(1);
