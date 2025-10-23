@@ -52,6 +52,11 @@ const messages = {
     // General
     invalid: "Invalid choice.",
     internalError: "Internal error",
+
+    // Comments
+    commentsTitle: "Comments",
+    commentsEmpty: "No comments yet.",
+    commentsFooter: "7. Prev  9. Next\n8. Back\n00. Home  0. Exit",
   },
   
   // Future locales go here (e.g., sw, lg) with identical keys
@@ -347,7 +352,8 @@ async function getFeedPage(page = 1) {
   const offset = Math.max(0, (page - 1) * PAGE_SIZE);
   const r = await pool.query(
     `
-    SELECT p.content,
+    SELECT p.id AS post_id,
+           p.content,
            COALESCE(u2.username, u1.username, 'Someone') AS username
     FROM post p
     LEFT JOIN app_user  u2 ON u2.id = p.user_id
@@ -372,7 +378,7 @@ async function getMyPostsPage(ussdUserId, page = 1) {
   const offset = Math.max(0, (page - 1) * PAGE_SIZE);
   const r = await pool.query(
     `
-    SELECT content
+    SELECT id AS post_id, content
     FROM post
     WHERE (ussd_user_id = $1 OR user_id IN (
             SELECT id FROM app_user WHERE ussd_user_id = $1
@@ -387,6 +393,47 @@ async function getMyPostsPage(ussdUserId, page = 1) {
   const hasNext = rows.length > PAGE_SIZE;
   const items = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
   return { items, hasNext };
+}
+
+
+/** COMMENTS: page over comments for a post (ASC, like posts.js) */
+async function getCommentsPage(postId, page = 1) {
+  const offset = Math.max(0, (page - 1) * PAGE_SIZE);
+  const r = await pool.query(
+    `
+    SELECT
+      c.body,
+      u.username AS author_username,
+      u.display_name AS author_display_name
+    FROM comment c
+    JOIN app_user u ON u.id = c.user_id
+    WHERE c.post_id = $1
+    ORDER BY c.created_at ASC
+    LIMIT $2 OFFSET $3
+    `,
+    [postId, PAGE_SIZE + 1, offset]
+  );
+  const rows = r.rows || [];
+  const hasNext = rows.length > PAGE_SIZE;
+  const items = hasNext ? rows.slice(0, PAGE_SIZE) : rows;
+  // normalize for display
+  return {
+    items: items.map(x => ({
+      username: x.author_display_name || x.author_username || "Someone",
+      content: x.body || ""
+    })),
+    hasNext
+  };
+}
+
+/** COMMENTS: figure out page nav from tokens after entering comments view */
+function deriveCommentsPage(tokens) {
+  let page = 1;
+  for (const s of tokens) {
+    if (s === "9") page += 1;           // Next
+    else if (s === "7") page = Math.max(1, page - 1); // Prev
+  }
+  return page;
 }
 
 /** Parse navigation segments to a page number and slot selection */
@@ -561,48 +608,92 @@ if (!userExists && LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
       }
 
       // DETAIL VIEW with Back
-      if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
-        // If user immediately pressed an action after opening detail:
-        if (postAction === "8") {
-          // Back to SAME PAGE list
-          const { items: listItems } = await getFeedPage(page);
-          const lines = listItems.map(
-            (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
-          );
-          const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
-          return res.send(`CON ${screen}`);
-        } else if (postAction === "9") {
-          // Jump to NEXT PAGE list
-          const { items: nextItems } = await getFeedPage(page + 1);
-          if (nextItems.length === 0) {
-            const { items: listItems } = await getFeedPage(page);
-            const lines = listItems.map(
-              (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
-            );
-            const screen = buildListScreen(
-              `${t(lang, "feedTitle")}\n${t(lang, "noMoreNext")}`,
-              lines,
-              t(lang, "navFooter")
-            );
-            return res.send(`CON ${screen}`);
-          }
-          const lines = nextItems.map(
-            (p, idx) => `${idx + 1}) ${p.username}: ${preview(p.content, 50)}`
-          );
-          const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
-          return res.send(`CON ${screen}`);
-        } else if (postAction === "00") {
-          return res.send(`CON ${t(lang, "mainMenu")}`);
-        } else if (postAction === "0") {
-          return res.send(`END ${t(lang, "goodbye")}`);
-        }
+      // DETAIL VIEW with Back + Comments
+if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
+  const idx = openSlot - 1;
+  const item = items[idx];
 
-        // Show the detail screen (CON) with Back option
-        const idx = openSlot - 1;
-        const item = items[idx];
-        const body = `${item.username}\n"${item.content}"\n${t(lang, "detailFooter")}`;
-        return res.send(`CON ${body}`);
-      }
+  // If user immediately pressed an action after opening detail:
+  if (postAction === "8") {
+    // Back to SAME PAGE list
+    const { items: listItems } = await getFeedPage(page);
+    const lines = listItems.map((p, i) => `${i + 1}) ${p.username}: ${preview(p.content, 50)}`);
+    const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
+    return res.send(`CON ${screen}`);
+  } else if (postAction === "9") {
+    // Jump to NEXT PAGE list
+    const { items: nextItems } = await getFeedPage(page + 1);
+    if (nextItems.length === 0) {
+      const { items: listItems } = await getFeedPage(page);
+      const lines = listItems.map((p, i) => `${i + 1}) ${p.username}: ${preview(p.content, 50)}`);
+      const screen = buildListScreen(
+        `${t(lang, "feedTitle")}\n${t(lang, "noMoreNext")}`,
+        lines,
+        t(lang, "navFooter")
+      );
+      return res.send(`CON ${screen}`);
+    }
+    const lines = nextItems.map((p, i) => `${i + 1}) ${p.username}: ${preview(p.content, 50)}`);
+    const screen = buildListScreen(t(lang, "feedTitle"), lines, t(lang, "navFooter"));
+    return res.send(`CON ${screen}`);
+  } else if (postAction === "00") {
+    return res.send(`CON ${t(lang, "mainMenu")}`);
+  } else if (postAction === "0") {
+    return res.send(`END ${t(lang, "goodbye")}`);
+  } else if (postAction === "5") {
+    // COMMENTS SUB-VIEW
+    const afterComments = afterSlot.slice(1); // tokens after pressing "5"
+
+    // NEW: handle Back/Home/Exit while in comments view
+    if (afterComments.includes("8")) {
+      // return to the post detail screen
+      const detailBody =
+        choice === "2"
+          ? `${item.username}\n"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`
+          : `"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+      return res.send(`CON ${detailBody}`);
+    }
+    if (afterComments.includes("00")) {
+      return res.send(`CON ${t(lang, "mainMenu")}`);
+    }
+    if (afterComments.includes("0")) {
+      return res.send(`END ${t(lang, "goodbye")}`);
+    }
+
+    const commentsPage = deriveCommentsPage(afterComments);
+    const { items: comments, hasNext } = await getCommentsPage(item.post_id, commentsPage);
+
+if ((comments || []).length === 0) {
+  // If they went too far forward, step back one page and show "no more"
+  if (commentsPage > 1) {
+    const backPage = commentsPage - 1;
+    const { items: backComments } = await getCommentsPage(item.post_id, backPage);
+    const backLines = backComments.map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
+    const screen = buildListScreen(
+      `${t(lang, "commentsTitle")}\n${t(lang, "noMoreNext")}`,
+      backLines,
+      t(lang, "commentsFooter")
+    );
+    return res.send(`CON ${screen}`);
+  }
+  // Truly no comments for this post
+  const screen = buildListScreen(
+    `${t(lang, "commentsTitle")}\n${t(lang, "commentsEmpty")}`,
+    [],
+    t(lang, "commentsFooter")
+  );
+  return res.send(`CON ${screen}`);
+}
+
+    const lines = comments.map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
+    const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
+    return res.send(`CON ${screen}`);
+  }
+
+  // Default: show detail with a "5. Comments" affordance
+  const body = `${item.username}\n"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+  return res.send(`CON ${body}`);
+}
 
       // LIST VIEW
       const lines = items.map(
@@ -638,38 +729,75 @@ if (!userExists && LANG_OPTIONS[rawParts[0]] && rawParts.length >= 2) {
       }
 
       // DETAIL VIEW with Back
-      if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
-        if (postAction === "8") {
-          const { items: listItems } = await getMyPostsPage(ussd.id, page);
-          const lines = listItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
-          const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
-          return res.send(`CON ${screen}`);
-        } else if (postAction === "9") {
-          const { items: nextItems } = await getMyPostsPage(ussd.id, page + 1);
-          if (nextItems.length === 0) {
-            const { items: listItems } = await getMyPostsPage(ussd.id, page);
-            const lines = listItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
-            const screen = buildListScreen(
-              `${t(lang, "myPostsTitle")}\n${t(lang, "noMoreNext")}`,
-              lines,
-              t(lang, "navFooter")
-            );
-            return res.send(`CON ${screen}`);
-          }
-          const lines = nextItems.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
-          const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
-          return res.send(`CON ${screen}`);
-        } else if (postAction === "00") {
-          return res.send(`CON ${t(lang, "mainMenu")}`);
-        } else if (postAction === "0") {
-          return res.send(`END ${t(lang, "goodbye")}`);
-        }
+      // DETAIL VIEW with Back + Comments
+if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) {
+  const idx = openSlot - 1;
+  const item = items[idx];
 
-        const idx = openSlot - 1;
-        const item = items[idx];
-        const body = `"${item.content}"\n${t(lang, "detailFooter")}`;
-        return res.send(`CON ${body}`);
-      }
+  if (postAction === "8") {
+    const { items: listItems } = await getMyPostsPage(ussd.id, page);
+    const lines = listItems.map((p, i) => `${i + 1}) ${preview(p.content, 50)}`);
+    const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
+    return res.send(`CON ${screen}`);
+  } else if (postAction === "9") {
+    const { items: nextItems } = await getMyPostsPage(ussd.id, page + 1);
+    if (nextItems.length === 0) {
+      const { items: listItems } = await getMyPostsPage(ussd.id, page);
+      const lines = listItems.map((p, i) => `${i + 1}) ${preview(p.content, 50)}`);
+      const screen = buildListScreen(
+        `${t(lang, "myPostsTitle")}\n${t(lang, "noMoreNext")}`,
+        lines,
+        t(lang, "navFooter")
+      );
+      return res.send(`CON ${screen}`);
+    }
+    const lines = nextItems.map((p, i) => `${i + 1}) ${preview(p.content, 50)}`);
+    const screen = buildListScreen(t(lang, "myPostsTitle"), lines, t(lang, "navFooter"));
+    return res.send(`CON ${screen}`);
+  } else if (postAction === "00") {
+    return res.send(`CON ${t(lang, "mainMenu")}`);
+  } else if (postAction === "0") {
+    return res.send(`END ${t(lang, "goodbye")}`);
+  } else if (postAction === "5") {
+    // COMMENTS SUB-VIEW
+    const afterComments = afterSlot.slice(1); // tokens after pressing "5"
+
+    // NEW: handle Back/Home/Exit while in comments view
+    if (afterComments.includes("8")) {
+      // return to the post detail screen
+      const detailBody =
+        choice === "2"
+          ? `${item.username}\n"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`
+          : `"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+      return res.send(`CON ${detailBody}`);
+    }
+    if (afterComments.includes("00")) {
+      return res.send(`CON ${t(lang, "mainMenu")}`);
+    }
+    if (afterComments.includes("0")) {
+      return res.send(`END ${t(lang, "goodbye")}`);
+    }
+
+    const commentsPage = deriveCommentsPage(afterComments);
+    const { items: comments } = await getCommentsPage(item.post_id, commentsPage);
+
+    if ((comments || []).length === 0) {
+      const screen = buildListScreen(
+        `${t(lang, "commentsTitle")}\n${t(lang, "commentsEmpty")}`,
+        [],
+        t(lang, "commentsFooter")
+      );
+      return res.send(`CON ${screen}`);
+    }
+
+    const lines = comments.map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
+    const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
+    return res.send(`CON ${screen}`);
+  }
+
+  const body = `"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+  return res.send(`CON ${body}`);
+}
 
       // LIST VIEW
       const lines = items.map((p, idx) => `${idx + 1}) ${preview(p.content, 50)}`);
