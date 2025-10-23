@@ -57,6 +57,10 @@ const messages = {
     commentsTitle: "Comments",
     commentsEmpty: "No comments yet.",
     commentsFooter: "7. Prev  9. Next\n8. Back\n00. Home  0. Exit",
+
+    // Comments (compose)
+    enterComment: "Type your comment (<=160)\n0. Exit",
+    commentPosted: "Comment added.",
   },
   
   // Future locales go here (e.g., sw, lg) with identical keys
@@ -324,7 +328,7 @@ async function ensureShadowAppUserForUssd(ussd) {
   const username = `${unameBase}_${ussd.id}`;
   const randomPass = crypto.randomBytes(16).toString("hex");
   const hash = await bcrypt.hash(randomPass, 10);
-
+  
   const ins = await pool.query(
     `INSERT INTO app_user (username, password_hash, email, phone, ussd_user_id, source)
      VALUES ($1,$2,$3,$4,$5,'ussd')
@@ -333,6 +337,21 @@ async function ensureShadowAppUserForUssd(ussd) {
   );
   return ins.rows[0].id;
 }
+
+/** Save a comment and bump post.comments_count (like posts.js) */
+async function saveComment(appUserId, postId, body) {
+  const trimmed = (body || "").slice(0, 160);
+  if (!trimmed) throw new Error("empty");
+  await pool.query(
+    `INSERT INTO comment (post_id, user_id, body) VALUES ($1,$2,$3)`,
+    [postId, appUserId, trimmed]
+  );
+  await pool.query(
+    `UPDATE post SET comments_count = comments_count + 1 WHERE id=$1`,
+    [postId]
+  );
+}
+
 
 /** Save a post into public.post (user_id only) — unchanged */
 async function savePost(appUserId, text) {
@@ -689,9 +708,41 @@ if ((comments || []).length === 0) {
     const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
     return res.send(`CON ${screen}`);
   }
+  } else if (postAction === "6") {
+  // REPLY FLOW
+  const afterReply = afterSlot.slice(1); // tokens after pressing "6"
+
+  // Back/Home/Exit during reply prompt
+  if (afterReply.includes("8")) {
+    const detailBody = `${item.username}\n"${item.content}"\n5. Comments\n6. Reply\n${t(lang, "detailFooter")}`;
+    return res.send(`CON ${detailBody}`);
+  }
+  if (afterReply.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
+  if (afterReply.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
+
+  // If they haven’t typed the comment yet, prompt
+  const commentText = afterReply[0];
+  if (!commentText) {
+    return res.send(`CON ${t(lang, "enterComment")}`);
+  }
+
+  // Save the comment
+  try {
+    const appUserId = await ensureShadowAppUserForUssd(ussd);
+    await saveComment(appUserId, item.post_id, commentText);
+    // After posting, show comments first page (nice loop)
+    const { items: comments } = await getCommentsPage(item.post_id, 1);
+    const lines = (comments || []).map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
+    const screen = buildListScreen(`${t(lang, "commentsTitle")}\n${t(lang, "commentPosted")}`, lines, t(lang, "commentsFooter"));
+    return res.send(`CON ${screen}`);
+  } catch {
+    // If body was empty or any DB hiccup, just return to prompt
+    return res.send(`CON ${t(lang, "enterComment")}`);
+  }
+}
 
   // Default: show detail with a "5. Comments" affordance
-  const body = `${item.username}\n"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+  const body = `${item.username}\n"${item.content}"\n5. Comments\n6. Reply\n${t(lang, "detailFooter")}`;
   return res.send(`CON ${body}`);
 }
 
@@ -794,8 +845,35 @@ if (openSlot && openSlot >= 1 && openSlot <= Math.min(PAGE_SIZE, items.length)) 
     const screen = buildListScreen(t(lang, "commentsTitle"), lines, t(lang, "commentsFooter"));
     return res.send(`CON ${screen}`);
   }
+  } else if (postAction === "6") {
+  // REPLY FLOW
+  const afterReply = afterSlot.slice(1);
 
-  const body = `"${item.content}"\n5. Comments\n${t(lang, "detailFooter")}`;
+  if (afterReply.includes("8")) {
+    const detailBody = `"${item.content}"\n5. Comments\n6. Reply\n${t(lang, "detailFooter")}`;
+    return res.send(`CON ${detailBody}`);
+  }
+  if (afterReply.includes("00")) return res.send(`CON ${t(lang, "mainMenu")}`);
+  if (afterReply.includes("0"))  return res.send(`END ${t(lang, "goodbye")}`);
+
+  const commentText = afterReply[0];
+  if (!commentText) {
+    return res.send(`CON ${t(lang, "enterComment")}`);
+  }
+
+  try {
+    const appUserId = await ensureShadowAppUserForUssd(ussd);
+    await saveComment(appUserId, item.post_id, commentText);
+    const { items: comments } = await getCommentsPage(item.post_id, 1);
+    const lines = (comments || []).map((c, i) => `${i + 1}) ${c.username}: ${preview(c.content, 50)}`);
+    const screen = buildListScreen(`${t(lang, "commentsTitle")}\n${t(lang, "commentPosted")}`, lines, t(lang, "commentsFooter"));
+    return res.send(`CON ${screen}`);
+  } catch {
+    return res.send(`CON ${t(lang, "enterComment")}`);
+  }
+}
+
+  const body = `"${item.content}"\n5. Comments\n6. Reply\n${t(lang, "detailFooter")}`;
   return res.send(`CON ${body}`);
 }
 
